@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+release/
+build/
+*.zip
+
+# Environment
+.env
+.env.local
+.env.local.*
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Project-specific
+PROMPT.md
+.gemini/
+.agents/
+.openobsidian/
+.openonyx/
+
+# Test & scratch files
+OO-Test-Vault/
+scratch/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Mobile (separate project)
+OOMobile/
+# Supabase CLI local state
+supabase/.temp/

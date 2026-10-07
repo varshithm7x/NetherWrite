@@ -1,0 +1,178 @@
+{
+  "name": "noteweave",
+  "version": "0.1.0",
+  "description": "An AI-assisted, local-first knowledge workspace for connected Markdown notes",
+  "main": "dist-electron/main.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && node scripts/start-electron.cjs\"",
+    "dev:web": "vite",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/build-preload.cjs",
+    "build": "tsc --noEmit && vite build && npm run build:electron",
+    "lint": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test": "vitest run",
+    "start": "node scripts/start-electron.cjs --production",
+    "package:linux": "npm run build && electron-builder --linux dir AppImage --x64 --publish never"
+  },
+  "keywords": [
+    "notes",
+    "knowledge-management",
+    "markdown",
+    "graph"
+  ],
+  "author": {
+    "name": "NoteWeave"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/language": "^6.11.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.8",
+    "@fontsource/inter": "^5.2.8",
+    "@xenova/transformers": "^2.17.2",
+    "d3": "^7.9.0",
+    "docx-preview": "^0.4.1",
+    "dompurify": "^3.2.7",
+    "lucide-react": "^1.8.0",
+    "mammoth": "^1.13.0",
+    "marked": "^15.0.8",
+    "pdfjs-dist": "^6.3.289",
+    "react": "^19.1.0",
+    "react-colorful": "^5.6.1",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/d3": "^7.4.3",
+    "@types/dompurify": "^3.2.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.1",
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "electron": "^41.10.7",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^26.1.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.3.1",
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.noteweave.app",
+    "productName": "NoteWeave",
+    "copyright": "Copyright © 2026 NoteWeave contributors",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    },
+    "linux": {
+      "executableName": "noteweave",
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "pacman"
+      ],
+      "category": "Office",
+      "icon": "build/icon.png"
+    },
+    "rpm": {
+      "fpm": [
+        "--rpm-rpmbuild-define=_build_id_links none",
+        "--no-auto-depends"
+      ]
+    },
+    "pacman": {
+      "fpm": [
+        "--no-auto-depends"
+      ],
+      "depends": [
+        "gtk3",
+        "nss",
+        "alsa-lib",
+        "libxss",
+        "libxtst",
+        "libnotify",
+        "libsecret",
+        "xdg-utils",
+        "at-spi2-core",
+        "cairo",
+        "dbus",
+        "expat",
+        "glib2",
+        "glibc",
+        "hicolor-icon-theme",
+        "libcups",
+        "libx11",
+        "libxcb",
+        "libxcomposite",
+        "libxdamage",
+        "libxext",
+        "libxfixes",
+        "libxkbcommon",
+        "libxrandr",
+        "mesa",
+        "nspr",
+        "pango",
+        "systemd-libs",
+        "util-linux-libs"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "backgroundColor": "#121212"
+    }
+  },
+  "type": "module",
+  "overrides": {
+    "protobufjs": "^7.6.5",
+    "@protobufjs/utf8": "1.1.1",
+    "@codemirror/state": "$@codemirror/state",
+    "sharp": "^0.35.0",
+    "electron-builder": "^26.15.3",
+    "app-builder-lib": "^26.15.3",
+    "dmg-builder": "^26.15.3",
+    "builder-util-runtime": "^9.7.0",
+    "js-yaml": "^5.2.1"
+  }
+}
