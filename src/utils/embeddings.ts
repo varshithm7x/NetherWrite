@@ -1,8 +1,8 @@
 /**
  * Embeddings — Local semantic embeddings via Transformers.js
  *
- * Storage: .openonyx/embeddings/ (one JSON file per note, NOT localStorage)
- * Index:   .openonyx/embeddings/_index.json (path→hash map for quick checks)
+ * Storage: .netherwrite/embeddings/ (one JSON file per note, NOT localStorage)
+ * Index:   .netherwrite/embeddings/_index.json (path→hash map for quick checks)
  *
  * Features:
  *  - Auto-embeds notes on create/update (hash-based change detection)
@@ -106,7 +106,7 @@ if (
     const subpath = getRemoteEmbeddingModelSubpath(url);
 
     if (subpath) {
-      const localPath = `.openonyx/models/Xenova/all-MiniLM-L6-v2/${subpath}`;
+      const localPath = `.netherwrite/models/Xenova/all-MiniLM-L6-v2/${subpath}`;
       try {
         const exists = await (window as any).electronAPI.fileExists(localPath);
         if (exists) {
@@ -182,7 +182,7 @@ const MODEL_ID = "Xenova/all-MiniLM-L6-v2";
 const EMBEDDING_DIM = 384;
 export const EMBEDDING_SCHEMA_VERSION = 2;
 export const EMBEDDING_CHUNK_SIZE = 1200;
-export const EMBEDDING_UPDATED_EVENT = "openonyx:embedding-updated";
+export const EMBEDDING_UPDATED_EVENT = "netherwrite:embedding-updated";
 const EMBEDDING_CHUNK_OVERLAP = 120;
 const MAX_STORED_SEGMENT_VECTORS = 8;
 
@@ -221,7 +221,7 @@ export async function isModelCached(): Promise<boolean> {
 
   if ((window as any).electronAPI) {
     try {
-      return await (window as any).electronAPI.fileExists(".openonyx/models/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx");
+      return await (window as any).electronAPI.fileExists(".netherwrite/models/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx");
     } catch {
       return false;
     }
@@ -620,7 +620,7 @@ async function ensureLoaded(): Promise<void> {
  */
 function tryMigrateFromLocalStorage(): void {
   try {
-    const raw = localStorage.getItem("openonyx-embeddings-v2");
+    const raw = localStorage.getItem("netherwrite-embeddings-v2");
     if (!raw) return;
     const data: { entries: StoredEmbedding[] } = JSON.parse(raw);
     for (const e of data.entries) {
@@ -629,7 +629,7 @@ function tryMigrateFromLocalStorage(): void {
     // Persist to disk
     persistAllToDisk();
     // Remove from localStorage after migration
-    localStorage.removeItem("openonyx-embeddings-v2");
+    localStorage.removeItem("netherwrite-embeddings-v2");
     console.log(`[Embeddings] Migrated ${data.entries.length} entries from localStorage to disk`);
   } catch { /* silent */ }
 }
@@ -686,17 +686,6 @@ export async function loadStoreAsync(): Promise<EmbeddingStore> {
 export function saveStore(_store: EmbeddingStore): void {
   // No-op — individual entries are persisted via persistEntry
   // This maintains backward API compatibility
-}
-
-/** Complete pending cache writes before reporting indexing complete or switching folders. */
-export async function flushEmbeddings(): Promise<void> {
-  await _debouncedWrite.flush();
-}
-
-/** Keep query vectors in the same coordinate space as the folder's cached index. */
-export function restoreCachedEmbeddingMode(mode: "semantic" | "lexical" | undefined): void {
-  if (mode === "lexical") _disabledReason = "cached-lexical";
-  else if (mode === "semantic") _disabledReason = null;
 }
 
 export function resetEmbeddingsStore(): void {
@@ -1019,8 +1008,8 @@ export interface TransitionMap {
 }
 
 // Suggestion history is small — keep in localStorage for now
-const SUGGESTION_HISTORY_KEY = "openonyx-suggestion-history-v1";
-const TRANSITION_MAP_KEY = "openonyx-suggestion-transitions-v1";
+const SUGGESTION_HISTORY_KEY = "netherwrite-suggestion-history-v1";
+const TRANSITION_MAP_KEY = "netherwrite-suggestion-transitions-v1";
 
 function normalizeTransitionConcept(value: string): string {
   return value

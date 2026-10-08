@@ -429,8 +429,8 @@ export function GraphView({
   );
 
   // Dynamic theme settings keys
-  const settingsKey = `openonyx-graph-settings-v8-${theme}-${vaultHash}`;
-  const positionsKey = `openonyx-graph-positions-v3-${vaultHash}`;
+  const settingsKey = `netherwrite-graph-settings-v8-${theme}-${vaultHash}`;
+  const positionsKey = `netherwrite-graph-positions-v3-${vaultHash}`;
 
   const [settings, setSettings] = useState<GraphSettings>(() => {
     try {

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=NetherWrite
+Comment=Local-first knowledge management app
+Exec=netherwrite %U
+Terminal=false
+Type=Application
+Icon=netherwrite
+StartupWMClass=NetherWrite
+Categories=Office;Utility;
+MimeType=text/markdown;text/plain;

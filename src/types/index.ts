@@ -1,5 +1,5 @@
 /**
- * Core type definitions for OpenOnyx
+ * Core type definitions for NetherWrite
  */
 
 export interface FileEntry {
@@ -93,7 +93,7 @@ export interface Command {
 export type ViewMode = "editor" | "preview" | "split";
 export type Theme =
   | "dark"
-  | "openonyx"
+  | "netherwrite"
   | "light"
   | "oceanic"
   | "dark-plus"
@@ -104,3 +104,92 @@ export type Theme =
   | "rose-quartz"
   | "custom";
 
+// ── Thought Model Types ──────────────────────────────
+
+export type ThoughtModelStatus = "idle" | "indexing" | "done" | "failed";
+
+export interface ThoughtModelBuildRequest {
+  vaultPath: string;
+  numClusters?: number; // default 12
+}
+
+export interface ThoughtModelBuildResponse {
+  jobId: string;
+  status: ThoughtModelStatus;
+}
+
+export interface ThoughtModelStatusResponse {
+  jobId: string;
+  status: ThoughtModelStatus;
+  progress?: number; // 0-100
+  message?: string;
+  error?: string;
+  total_notes?: number;
+  total_chunks?: number;
+}
+
+export interface ThoughtModelChunk {
+  chunkId: string;
+  noteId: string;
+  notePath: string;
+  noteTitle: string;
+  chunkText: string;
+}
+
+export interface ThoughtModelTheme {
+  clusterId: number;
+  keywords: string[];
+  representativeChunks: ThoughtModelChunk[];
+  noteCount: number;
+}
+
+export interface ThoughtModelThemesResponse {
+  themes: ThoughtModelTheme[];
+  totalNotes: number;
+  totalChunks: number;
+}
+
+export interface ThoughtModelQueryRequest {
+  jobId: string;
+  query: string;
+  topK?: number; // default 10
+}
+
+export interface ThoughtModelQueryResult {
+  score: number;
+  noteTitle: string;
+  notePath: string;
+  chunkText: string;
+  clusterId: number;
+}
+
+export interface ThoughtModelQueryResponse {
+  query: string;
+  results: ThoughtModelQueryResult[];
+}
+
+// Re-export Spaces types
+export type {
+  Space,
+  SpaceChunk,
+  SpaceVectorIndex,
+  SpaceIndexEntry,
+  SpaceChatMessage,
+  SpaceForkRequest,
+} from "./spaces";
+
+export type {
+  McpConfiguration,
+  McpDiagnostic,
+  McpEnvironmentValue,
+  McpHttpTransport,
+  McpSecretReference,
+  McpServerConfig,
+  McpServerRuntimeState,
+  McpServerSnapshot,
+  McpServerStatus,
+  McpStdioTransport,
+  McpTool,
+  McpTransport,
+  McpTransportConfig,
+} from "./mcp";

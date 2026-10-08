@@ -94,7 +94,7 @@ describe("vault RAG citations", () => {
 
   it("does not pad focused lexical questions with semantic-only passages", () => {
     const results = rankVaultPassages("who is volt", [
-      { path: "Profile.md", content: "VOLT is a computer science student, developer and founder of OpenOnyx.", semanticScore: 0.3 },
+      { path: "Profile.md", content: "VOLT is a computer science student, developer and founder of NetherWrite.", semanticScore: 0.3 },
       { path: "Test.md", content: "VOLT IS A SUPERHUMAN WHO EXISTS IN 2026.", semanticScore: 0.2 },
       { path: "Virtualization.md", content: "Virtualization creates isolated virtual machines.", semanticScore: 0.95 },
     ], 8);

@@ -40,8 +40,8 @@ describe('embedding cache metadata refresh', () => {
   it('resolves WASM assets beside index.html in dev and packaged builds', () => {
     expect(resolveTransformersWasmPath('2.17.2', 'http://localhost:5173/index.html', false))
       .toBe('http://localhost:5173/wasm/');
-    expect(resolveTransformersWasmPath('2.17.2', 'file:///opt/OpenOnyx/resources/app.asar/dist/index.html', false))
-      .toBe('file:///opt/OpenOnyx/resources/app.asar/dist/wasm/');
+    expect(resolveTransformersWasmPath('2.17.2', 'file:///opt/NetherWrite/resources/app.asar/dist/index.html', false))
+      .toBe('file:///opt/NetherWrite/resources/app.asar/dist/wasm/');
   });
 
   it('only caches model files fetched from the remote model host', () => {

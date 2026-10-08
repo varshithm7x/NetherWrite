@@ -53,10 +53,10 @@ describe("AI settings", () => {
     expect(loaded?.apiKey).toBe("sk-test-secret-123");
     expect(loaded?.provider).toBe("openrouter");
 
-    // Verify localStorage contains NO plaintext key under openonyx-ai-settings
-    expect(window.localStorage.getItem("openonyx-ai-settings")).toBeNull();
+    // Verify localStorage contains NO plaintext key under netherwrite-ai-settings
+    expect(window.localStorage.getItem("netherwrite-ai-settings")).toBeNull();
 
-    // Verify saved to disk store (.openonyx/ai-settings.json)
+    // Verify saved to disk store (.netherwrite/ai-settings.json)
     const diskData = await readData<any>("ai-settings.json");
     expect(diskData?.apiKey).toBe("sk-test-secret-123");
   });
@@ -82,7 +82,7 @@ describe("AI settings", () => {
   it("migrates legacy localStorage value once to disk and deletes it from localStorage", async () => {
     // Seed legacy localStorage
     window.localStorage.setItem(
-      "openonyx-ai-settings",
+      "netherwrite-ai-settings",
       JSON.stringify({
         apiKey: "sk-legacy-key-999",
         modelId: "openai/gpt-4o",
@@ -98,7 +98,7 @@ describe("AI settings", () => {
     expect(loadedAsync.apiKey).toBe("sk-legacy-key-999");
 
     // Confirm legacy localStorage was deleted
-    expect(window.localStorage.getItem("openonyx-ai-settings")).toBeNull();
+    expect(window.localStorage.getItem("netherwrite-ai-settings")).toBeNull();
 
     // Confirm stored on disk
     const diskData = await readData<any>("ai-settings.json");
@@ -126,7 +126,7 @@ describe("AI settings", () => {
       customBaseUrl: "",
     });
     expect(headers.Authorization).toBe("Bearer sk-or");
-    expect(headers["X-Title"]).toBe("OpenOnyx");
+    expect(headers["X-Title"]).toBe("NetherWrite");
   });
 
   it("maps common provider status codes", async () => {

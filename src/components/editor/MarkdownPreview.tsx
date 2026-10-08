@@ -1,0 +1,2033 @@
+import { parseResourceJson, resourceBlocks, serializeExternalResource } from "../../utils/appResources";
+import type { ExternalResource } from "../../types/appResources";
+import { createResourceCard, openResource } from "../apps/ResourceCard";
+/**
+ * Markdown Preview
+ *
+ * Renders markdown content as styled HTML using the `marked` library.
+ * Features:
+ * - [[wiki-links]] and [[note|alias]] support
+ * - [[note#heading]] header links
+ * - #tags with click handling
+ * - Clickable checkboxes that update source
+ * - Obsidian-style callouts/admonitions
+ * - ![[embed]] note embeds
+ * - Link preview on hover
+ * - DOMPurify XSS protection
+ */
+
+import React, {
+  useMemo,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
+import { marked } from "marked";
+import markedKatex from "marked-katex-extension";
+import DOMPurify from "dompurify";
+import { resolveVaultImageSrc } from "../../utils/resolveImageSrc";
+import { bindPreviewMediaFallbacks, sanitizePreviewHtml } from "../../utils/previewSanitize";
+import { getSmartEmbed, getDisplayDomain, cleanEmbedUrl, toggleUrlInMarkdown } from "../../utils/urlHelper";
+import { runMarkdownPostProcessors } from "../../lib/obsidian-api/markdown";
+import type { AppSettings } from "../settings/SettingsPage";
+import type { NoteComment, PendingComment } from "../../types/comments";
+import { getCommentDisplayText } from "../../utils/comment-anchors";
+import { protectInvalidMath } from "../../utils/markdownMathSafety";
+
+import { initializeInteractiveMermaid } from "../../utils/mermaid-layout-engine";
+
+// Enable math formatting
+// Provider/PDF text can contain arbitrary Unicode, including replacement
+// characters.  KaTeX should only enhance valid math; unsupported Unicode in
+// surrounding text must remain text and must not produce console warnings.
+marked.use(markedKatex({ throwOnError: false, strict: false }));
+
+// Intercept all markdown images (including reference links) to resolve local vault paths
+marked.use({
+  renderer: {
+    image(token) {
+      const { href, title, text } = token;
+      const resolvedSrc = resolveVaultImageSrc(href);
+      const safeSrc = String(resolvedSrc).replace(/"/g, "&quot;");
+      const safeAlt = String(text).replace(/"/g, "&quot;");
+      const { width, crop, offsetX, offsetY } = parseImageRenderMeta(title, text);
+      const styleParts: string[] = ["max-width:100%", "height:auto", "box-sizing:border-box"];
+      if (width && width > 0) {
+        styleParts.push(`max-width:${Math.round(width)}px`);
+        styleParts.push("width:100%");
+      }
+      if (crop === "cover") {
+        styleParts.push("aspect-ratio:4 / 3");
+        styleParts.push("object-fit:cover");
+        styleParts.push(`object-position:calc(50% + ${Math.round(offsetX)}px) calc(50% + ${Math.round(offsetY)}px)`);
+      }
+      return `<img src="${safeSrc}" alt="${safeAlt}" ${title ? `title="${String(title).replace(/"/g, "&quot;")}"` : ""} style="${styleParts.join(";")}" />`;
+    }
+  }
+});
+
+function isPreviewTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.includes("|");
+}
+
+function parsePreviewTableCells(line: string): string[] {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function isPreviewTableSeparator(line: string): boolean {
+  return isPreviewTableRow(line) && parsePreviewTableCells(line).every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function formatPreviewTableRow(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+function normalizeMarkdownTables(markdown: string): string {
+  const lines = markdown.split("\n");
+  const normalized: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!isPreviewTableRow(lines[i]) || i + 1 >= lines.length || !isPreviewTableSeparator(lines[i + 1])) {
+      normalized.push(lines[i]);
+      continue;
+    }
+
+    const headerCells = parsePreviewTableCells(lines[i]);
+    const columnCount = Math.max(1, headerCells.length);
+    const tableLines = [lines[i], lines[i + 1]];
+    i += 2;
+
+    while (i < lines.length && isPreviewTableRow(lines[i])) {
+      tableLines.push(lines[i]);
+      i++;
+    }
+    i--;
+
+    normalized.push(formatPreviewTableRow(normalizeTableCells(headerCells, columnCount, "")));
+    normalized.push(formatPreviewTableRow(normalizeTableCells(parsePreviewTableCells(tableLines[1]), columnCount, "---")));
+
+    for (const row of tableLines.slice(2)) {
+      if (isPreviewTableSeparator(row)) continue;
+      normalized.push(formatPreviewTableRow(normalizeTableCells(parsePreviewTableCells(row), columnCount, "")));
+    }
+  }
+
+  return normalized.join("\n");
+}
+
+function normalizeTableCells(cells: string[], columnCount: number, fill: string): string[] {
+  const normalized = cells.slice(0, columnCount);
+  while (normalized.length < columnCount) normalized.push(fill);
+  return normalized;
+}
+
+// Keep iframe allow and sandbox attributes unchanged during DOMPurify sanitization
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+  if (node.tagName === "IFRAME" && (data.attrName === "allow" || data.attrName === "sandbox")) {
+    data.forceKeepAttr = true;
+  }
+});
+
+// Beautiful SVG icons for premium look
+const CALLOUT_ICONS = {
+  note: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
+  info: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+  tip: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1 .4 2.5 1.5 3.5.7.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>`,
+  important: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`,
+  warning: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  danger: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`,
+  bug: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3 3 0 1 1 6 0v1"/><path d="M12 20c-4.97 0-9-4.03-9-9 0-4.97 4.03-9 9-9s9 4.03 9 9c0 4.97-4.03 9-9 9Z"/><path d="M12 9v11"/><path d="M3 11h18"/><path d="m19 15 3 3"/><path d="m5 15-3 3"/><path d="m19 7 3-3"/><path d="m5 7-3-3"/></svg>`,
+  example: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M9 18h6"/><path d="M9 10h6"/></svg>`,
+  quote: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 .25 1 1 1Z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 .25 1 1 1Z"/></svg>`,
+  success: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+  question: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`,
+  abstract: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 1 1 3-3h7z"/></svg>`,
+  todo: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/></svg>`,
+};
+
+// Callout type icons and colors
+const CALLOUT_TYPES: Record<string, { icon: string; color: string }> = {
+  note: { icon: CALLOUT_ICONS.note, color: "#448aff" },
+  info: { icon: CALLOUT_ICONS.info, color: "#448aff" },
+  tip: { icon: CALLOUT_ICONS.tip, color: "#00c853" },
+  hint: { icon: CALLOUT_ICONS.tip, color: "#00c853" },
+  important: { icon: CALLOUT_ICONS.important, color: "#ff5252" },
+  warning: { icon: CALLOUT_ICONS.warning, color: "#ff9100" },
+  caution: { icon: CALLOUT_ICONS.warning, color: "#ff9100" },
+  danger: { icon: CALLOUT_ICONS.danger, color: "#ff5252" },
+  error: { icon: CALLOUT_ICONS.danger, color: "#ff5252" },
+  bug: { icon: CALLOUT_ICONS.bug, color: "#ff5252" },
+  example: { icon: CALLOUT_ICONS.example, color: "#7c4dff" },
+  quote: { icon: CALLOUT_ICONS.quote, color: "#9e9e9e" },
+  cite: { icon: CALLOUT_ICONS.quote, color: "#9e9e9e" },
+  success: { icon: CALLOUT_ICONS.success, color: "#00c853" },
+  check: { icon: CALLOUT_ICONS.success, color: "#00c853" },
+  done: { icon: CALLOUT_ICONS.success, color: "#00c853" },
+  question: { icon: CALLOUT_ICONS.question, color: "#448aff" },
+  help: { icon: CALLOUT_ICONS.question, color: "#448aff" },
+  faq: { icon: CALLOUT_ICONS.question, color: "#448aff" },
+  abstract: { icon: CALLOUT_ICONS.abstract, color: "#00b8d4" },
+  summary: { icon: CALLOUT_ICONS.abstract, color: "#00b8d4" },
+  tldr: { icon: CALLOUT_ICONS.abstract, color: "#00b8d4" },
+  todo: { icon: CALLOUT_ICONS.todo, color: "#448aff" },
+  failure: { icon: CALLOUT_ICONS.danger, color: "#ff5252" },
+  fail: { icon: CALLOUT_ICONS.danger, color: "#ff5252" },
+  missing: { icon: CALLOUT_ICONS.danger, color: "#ff5252" },
+};
+
+interface MarkdownPreviewProps {
+  documentId?: string;
+  content: string;
+  onLinkClick: (linkName: string, heading?: string) => void;
+  onCheckboxToggle?: (lineIndex: number, checked: boolean) => void;
+  onEmbed?: (noteName: string) => string | null;
+  onGetLinkPreview?: (noteName: string) => string | null;
+  onImageClick?: (src: string, alt: string) => void;
+  theme?: string;
+  settings?: AppSettings;
+  onContentChange?: (content: string) => void;
+  constrainWidth?: boolean;
+  comments?: NoteComment[];
+  pendingComment?: PendingComment | null;
+  activeCommentId?: string | null;
+  onCommentClick?: (commentId: string) => void;
+}
+
+const linkPreviewClass = "bg-(--bg-elevated) border border-(--border-medium) rounded-lg shadow-none max-w-[400px] max-h-[300px] overflow-hidden flex flex-col animate-fade-in";
+const linkPreviewHeaderClass = "px-3 py-2 border-b border-(--border-subtle) bg-(--bg-secondary)";
+const linkPreviewTitleClass = "font-semibold text-[var(--text-sm)] text-(--text-link)";
+const linkPreviewContentClass = "p-3 overflow-auto text-[var(--text-sm)] leading-normal text-(--text-secondary) [&_p]:mt-0 [&_p]:mb-2 [&_p:last-child]:mb-0 [&_.preview-empty]:text-(--text-muted) [&_.preview-empty]:italic [&_h1]:text-[var(--text-base)] [&_h1]:mt-0 [&_h1]:mb-2 [&_h2]:text-[var(--text-base)] [&_h2]:mt-0 [&_h2]:mb-2 [&_h3]:text-[var(--text-base)] [&_h3]:mt-0 [&_h3]:mb-2 [&_code]:bg-(--bg-code) [&_code]:px-1 [&_code]:py-px [&_code]:rounded-[3px] [&_code]:text-[0.9em] markdown-rendered";
+const markdownPreviewClass =
+  "markdown-preview [&_.embed-container]:my-[var(--space-4)] [&_.embed-container]:overflow-hidden [&_.embed-container]:rounded-[var(--radius-md)] [&_.embed-container]:border [&_.embed-container]:border-[var(--border-medium)] [&_.embed-container]:bg-[var(--bg-secondary)] [&_.embed-content]:p-[var(--space-3)] [&_.embed-content]:text-[length:var(--text-sm)] [&_.embed-content]:text-[var(--text-secondary)] [&_.embed-icon]:opacity-60 [&_.embed-missing]:bg-[var(--bg-secondary)] [&_.embed-missing]:p-[var(--space-3)] [&_.embed-missing]:italic [&_.embed-missing]:text-[var(--text-muted)] [&_.embed-title]:flex [&_.embed-title]:items-center [&_.embed-title]:gap-[var(--space-2)] [&_.embed-title]:border-b [&_.embed-title]:border-[var(--border-subtle)] [&_.embed-title]:bg-[var(--bg-tertiary)] [&_.embed-title]:px-[var(--space-3)] [&_.embed-title]:py-[var(--space-2)] [&_.embed-title]:text-[length:var(--text-sm)] [&_.embed-title]:font-medium [&_.embed-title]:text-[var(--text-link)]";
+
+function schedulePreviewIdleWork(callback: () => void, timeout = 500): () => void {
+  let cancelled = false;
+  const run = () => {
+    if (!cancelled) callback();
+  };
+  const idleWindow = window as typeof window & {
+    requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
+    cancelIdleCallback?: (id: number) => void;
+  };
+
+  if (idleWindow.requestIdleCallback) {
+    const id = idleWindow.requestIdleCallback(run, { timeout });
+    return () => {
+      cancelled = true;
+      idleWindow.cancelIdleCallback?.(id);
+    };
+  }
+
+  const id = window.setTimeout(run, 0);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(id);
+  };
+}
+
+function headingLevel(el: Element): number {
+  const match = el.tagName.match(/^H([1-6])$/);
+  return match ? Number(match[1]) : 0;
+}
+
+function getFoldableHeadingContent(heading: HTMLElement): HTMLElement[] {
+  const level = headingLevel(heading);
+  if (!level) return [];
+  const content: HTMLElement[] = [];
+  let node = heading.nextElementSibling as HTMLElement | null;
+  while (node) {
+    const nextLevel = headingLevel(node);
+    if (nextLevel > 0 && nextLevel <= level) break;
+    content.push(node);
+    node = node.nextElementSibling as HTMLElement | null;
+  }
+  return content;
+}
+
+function setHeadingFoldButtonIcon(button: HTMLButtonElement, collapsed: boolean): void {
+  let svg = button.querySelector<SVGSVGElement>("svg");
+  if (!svg) {
+    button.innerHTML = [
+      '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:14px;height:14px;flex:0 0 auto;transition:transform 160ms cubic-bezier(0.2,0,0,1)">',
+      '<path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"></path>',
+      "</svg>",
+    ].join("");
+    svg = button.querySelector<SVGSVGElement>("svg");
+  }
+  if (svg) {
+    svg.style.transform = `rotate(${collapsed ? "0deg" : "90deg"})`;
+  }
+}
+
+const HEADING_FOLD_ANIMATION_MS = 220;
+const headingFoldTimers = new WeakMap<HTMLElement, number>();
+
+function clearHeadingFoldTimer(el: HTMLElement): void {
+  const timer = headingFoldTimers.get(el);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    headingFoldTimers.delete(el);
+  }
+}
+
+function createHeadingFoldWrapper(heading: HTMLElement, elements: HTMLElement[]): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "heading-fold-content";
+  wrapper.dataset.headingFoldCollapsed = "false";
+  wrapper.style.display = "block";
+  heading.after(wrapper);
+  for (const el of elements) {
+    wrapper.appendChild(el);
+  }
+  return wrapper;
+}
+
+function finishExpandedHeadingFold(wrapper: HTMLElement): void {
+  wrapper.style.height = "auto";
+  wrapper.style.overflow = "";
+  wrapper.style.opacity = "";
+  wrapper.style.pointerEvents = "";
+  wrapper.style.transition = "";
+  wrapper.style.willChange = "";
+}
+
+function finishCollapsedHeadingFold(wrapper: HTMLElement): void {
+  wrapper.style.display = "none";
+  wrapper.style.height = "0px";
+  wrapper.style.overflow = "hidden";
+  wrapper.style.opacity = "0";
+  wrapper.style.pointerEvents = "none";
+  wrapper.style.transition = "";
+  wrapper.style.willChange = "";
+}
+
+function animateHeadingFoldContent(wrapper: HTMLElement, collapsed: boolean): void {
+  clearHeadingFoldTimer(wrapper);
+  wrapper.dataset.headingFoldCollapsed = String(collapsed);
+
+  const transition = [
+    `height ${HEADING_FOLD_ANIMATION_MS}ms cubic-bezier(0.2,0,0,1)`,
+    `opacity ${Math.max(120, HEADING_FOLD_ANIMATION_MS - 40)}ms ease`,
+  ].join(",");
+
+  if (collapsed) {
+    if (wrapper.style.display === "none") return;
+
+    const startHeight = wrapper.getBoundingClientRect().height;
+    wrapper.style.transition = "none";
+    wrapper.style.display = "block";
+    wrapper.style.overflow = "hidden";
+    wrapper.style.height = `${startHeight}px`;
+    wrapper.style.opacity = "1";
+    wrapper.style.pointerEvents = "none";
+    wrapper.style.willChange = "height, opacity";
+    void wrapper.offsetHeight;
+    wrapper.style.transition = transition;
+
+    window.requestAnimationFrame(() => {
+      if (wrapper.dataset.headingFoldCollapsed !== "true") return;
+      wrapper.style.height = "0px";
+      wrapper.style.opacity = "0";
+    });
+
+    const timer = window.setTimeout(() => {
+      if (wrapper.dataset.headingFoldCollapsed === "true") {
+        finishCollapsedHeadingFold(wrapper);
+      }
+      headingFoldTimers.delete(wrapper);
+    }, HEADING_FOLD_ANIMATION_MS);
+    headingFoldTimers.set(wrapper, timer);
+    return;
+  }
+
+  wrapper.style.transition = "none";
+  wrapper.style.display = "block";
+  wrapper.style.overflow = "hidden";
+  wrapper.style.height = "0px";
+  wrapper.style.opacity = "0";
+  wrapper.style.pointerEvents = "none";
+  wrapper.style.willChange = "height, opacity";
+  void wrapper.offsetHeight;
+  const targetHeight = wrapper.scrollHeight;
+  wrapper.style.transition = transition;
+
+  window.requestAnimationFrame(() => {
+    if (wrapper.dataset.headingFoldCollapsed === "true") return;
+    wrapper.style.height = `${targetHeight}px`;
+    wrapper.style.opacity = "1";
+  });
+
+  const timer = window.setTimeout(() => {
+    if (wrapper.dataset.headingFoldCollapsed !== "true") {
+      finishExpandedHeadingFold(wrapper);
+    }
+    headingFoldTimers.delete(wrapper);
+  }, HEADING_FOLD_ANIMATION_MS);
+  headingFoldTimers.set(wrapper, timer);
+}
+
+function installHeadingFoldControls(container: HTMLElement): void {
+  container.querySelectorAll(".heading-fold-toggle").forEach((el) => el.remove());
+  const headings = Array.from(
+    container.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"),
+  );
+
+  for (const heading of headings) {
+    const foldableContent = getFoldableHeadingContent(heading);
+    if (foldableContent.length === 0) continue;
+    const foldWrapper = createHeadingFoldWrapper(heading, foldableContent);
+
+    heading.style.position = "relative";
+    heading.style.paddingLeft = heading.style.paddingLeft || "0";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "heading-fold-toggle";
+    button.setAttribute("aria-label", "Fold heading");
+    button.setAttribute("aria-expanded", "true");
+    setHeadingFoldButtonIcon(button, false);
+    button.style.cssText = [
+      "position:absolute",
+      "left:-24px",
+      "top:50%",
+      "transform:translateY(-50%)",
+      "display:inline-flex",
+      "align-items:center",
+      "justify-content:center",
+      "width:20px",
+      "height:20px",
+      "border:0",
+      "border-radius:var(--radius-sm)",
+      "background:transparent",
+      "color:var(--text-muted)",
+      "opacity:0",
+      "cursor:pointer",
+      "font-size:12px",
+      "line-height:1",
+      "transition:opacity 120ms ease,color 120ms ease,background-color 120ms ease,transform 120ms ease",
+    ].join(";");
+
+    const show = () => {
+      button.style.opacity = "1";
+    };
+    const hide = () => {
+      if (button.dataset.collapsed !== "true") button.style.opacity = "0";
+    };
+    heading.addEventListener("mouseenter", show);
+    heading.addEventListener("mouseleave", hide);
+    button.addEventListener("mouseenter", show);
+    button.addEventListener("mouseleave", hide);
+    button.addEventListener("mouseover", () => {
+      button.style.backgroundColor = "var(--bg-hover)";
+      button.style.color = "var(--text-primary)";
+    });
+    button.addEventListener("mouseout", () => {
+      button.style.backgroundColor = "transparent";
+      button.style.color = "var(--text-muted)";
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const isCollapsed = button.dataset.collapsed === "true";
+      const nextCollapsed = !isCollapsed;
+      button.dataset.collapsed = String(nextCollapsed);
+      setHeadingFoldButtonIcon(button, nextCollapsed);
+      button.setAttribute("aria-label", nextCollapsed ? "Unfold heading" : "Fold heading");
+      button.setAttribute("aria-expanded", String(!nextCollapsed));
+      button.style.opacity = nextCollapsed ? "1" : "0";
+      animateHeadingFoldContent(foldWrapper, nextCollapsed);
+    });
+
+    heading.prepend(button);
+  }
+}
+
+function parseImageRenderMeta(title?: string | null, alt?: string | null): {
+  width?: number;
+  crop: "contain" | "cover";
+  offsetX: number;
+  offsetY: number;
+} {
+  const raw = title || "";
+  const widthMatch = raw.match(/(?:^|[\s,])w(?:idth)?=(\d{2,4})/i);
+  const cropMatch = raw.match(/(?:^|[\s,])crop=(cover|contain)/i);
+  const offsetXMatch = raw.match(/(?:^|[\s,])ox=(-?\d{1,4})/i);
+  const offsetYMatch = raw.match(/(?:^|[\s,])oy=(-?\d{1,4})/i);
+  let width = widthMatch
+    ? Math.max(80, Math.min(1600, Number(widthMatch[1])))
+    : undefined;
+  if (!width && alt) {
+    const altPipeMatch = alt.match(/\|(\d{2,4})(?:x\d+)?$/);
+    if (altPipeMatch) {
+      width = Math.max(80, Math.min(1600, Number(altPipeMatch[1])));
+    } else {
+      const altDimMatch = alt.trim().match(/^(\d{2,4})(?:x\d+)?$/);
+      if (altDimMatch) {
+        width = Math.max(80, Math.min(1600, Number(altDimMatch[1])));
+      }
+    }
+  }
+  const crop = (cropMatch?.[1] as "contain" | "cover") || "contain";
+  const offsetX = offsetXMatch
+    ? Math.max(-1200, Math.min(1200, Number(offsetXMatch[1])))
+    : 0;
+  const offsetY = offsetYMatch
+    ? Math.max(-1200, Math.min(1200, Number(offsetYMatch[1])))
+    : 0;
+  return { width, crop, offsetX, offsetY };
+}
+
+function protectFencedCodeBlocks(text: string): {
+  text: string;
+  restore: (value: string) => string;
+} {
+  const blocks: string[] = [];
+  const protectedText = text.replace(
+    /(^|\n)([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2\3[ \t]*(?=\n|$)/g,
+    (match) => {
+      const token = `\uE000CODE_BLOCK_${blocks.length}\uE000`;
+      blocks.push(match);
+      return token;
+    },
+  );
+
+  return {
+    text: protectedText,
+    restore: (value: string) =>
+      value.replace(/\uE000CODE_BLOCK_(\d+)\uE000/g, (_, index) => blocks[Number(index)] || ""),
+  };
+}
+function protectInlineCode(text: string): {
+  text: string;
+  restore: (value: string) => string;
+} {
+  const blocks: string[] = [];
+  const protectedText = text.replace(/`[^`\n]+`/g, (match) => {
+    const token = `\uE001INLINE_CODE_${blocks.length}\uE001`;
+    blocks.push(match);
+    return token;
+  });
+
+  return {
+    text: protectedText,
+    restore: (value: string) =>
+      value.replace(/\uE001INLINE_CODE_(\d+)\uE001/g, (_, index) => blocks[Number(index)] || ""),
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getCommentRangeText(source: string, from: number, to: number, fallback: string): string {
+  const ranged = source.slice(Math.max(0, from), Math.max(0, to));
+  return getCommentDisplayText(fallback) || getCommentDisplayText(ranged);
+}
+
+function getSourceOccurrenceIndex(source: string, phrase: string, from: number): number {
+  if (!phrase) return 0;
+  const before = getCommentDisplayText(source.slice(0, Math.max(0, from))).toLowerCase();
+  const regex = new RegExp(escapeRegExp(phrase.toLowerCase()), "g");
+  let count = 0;
+  while (regex.exec(before)) count++;
+  return count;
+}
+
+function findNthOccurrence(text: string, phrase: string, occurrenceIndex: number): { index: number; length: number } | null {
+  if (!phrase) return null;
+  let fromIndex = 0;
+  for (let i = 0; i <= occurrenceIndex; i++) {
+    const found = text.indexOf(phrase, fromIndex);
+    if (found === -1) return null;
+    if (i === occurrenceIndex) return { index: found, length: phrase.length };
+    fromIndex = found + phrase.length;
+  }
+  return null;
+}
+
+function findNthOccurrenceInsensitive(text: string, phrase: string, occurrenceIndex: number): { index: number; length: number } | null {
+  return findNthOccurrence(text.toLowerCase(), phrase.toLowerCase(), occurrenceIndex);
+}
+
+function markHtmlTextOccurrence(
+  html: string,
+  phrase: string,
+  occurrenceIndex: number,
+  attrs: Record<string, string>,
+): string {
+  if (!phrase.trim() || typeof window === "undefined" || typeof DOMParser === "undefined") return html;
+
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  const body = doc.body;
+  const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const segments: { node: Text; start: number; end: number; wrappable: boolean }[] = [];
+  let fullText = "";
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const parent = node.parentElement;
+    if (!parent) continue;
+    const start = fullText.length;
+    fullText += node.nodeValue || "";
+    segments.push({
+      node,
+      start,
+      end: fullText.length,
+      wrappable: !parent.closest(".cm-comment-highlight"),
+    });
+  }
+
+  const match = findNthOccurrence(fullText, phrase, occurrenceIndex) || findNthOccurrenceInsensitive(fullText, phrase, occurrenceIndex);
+  if (!match) return html;
+
+  const endIndex = match.index + match.length;
+  const matchedSegments = segments.filter(
+    (segment) => segment.wrappable && match.index < segment.end && endIndex > segment.start,
+  );
+  if (matchedSegments.length === 0) return html;
+
+  // Wrap each text-node fragment independently. Range.surroundContents throws
+  // when a selection crosses elements such as <strong>, <code>, or <a>.
+  for (let index = matchedSegments.length - 1; index >= 0; index--) {
+    const segment = matchedSegments[index];
+    const startOffset = Math.max(0, match.index - segment.start);
+    const endOffset = Math.min(segment.node.length, endIndex - segment.start);
+    if (startOffset >= endOffset) continue;
+    const range = doc.createRange();
+    range.setStart(segment.node, startOffset);
+    range.setEnd(segment.node, endOffset);
+    const mark = doc.createElement("mark");
+    for (const [name, value] of Object.entries(attrs)) {
+      mark.setAttribute(name, value);
+    }
+    range.surroundContents(mark);
+  }
+
+  return body.innerHTML;
+}
+
+/**
+ * Wraps only the saved comment ranges in the rendered HTML.
+ */
+export function applyCommentHighlightsToHtml(
+  html: string,
+  source: string,
+  comments?: NoteComment[],
+  pendingComment?: PendingComment | null,
+  activeCommentId?: string | null,
+): string {
+  if ((!comments || comments.length === 0) && !pendingComment) return html;
+
+  let result = html;
+
+  if (comments) {
+    for (const c of comments) {
+      if (c.resolved) continue;
+      const phrase = getCommentRangeText(source, c.from, c.to, c.selectedText);
+      const occurrenceIndex = getSourceOccurrenceIndex(source, phrase, c.from);
+      result = markHtmlTextOccurrence(
+        result,
+        phrase,
+        occurrenceIndex,
+        {
+          class: `cm-comment-highlight${c.id === activeCommentId ? " cm-comment-active" : ""}`,
+          "data-comment-id": c.id,
+        },
+      );
+    }
+  }
+
+  if (pendingComment) {
+    const phrase = getCommentRangeText(source, pendingComment.from, pendingComment.to, pendingComment.selectedText);
+    const occurrenceIndex = getSourceOccurrenceIndex(source, phrase, pendingComment.from);
+    result = markHtmlTextOccurrence(
+      result,
+      phrase,
+      occurrenceIndex,
+      { class: "cm-comment-highlight cm-comment-pending" },
+    );
+  }
+
+  return result;
+}
+
+export function MarkdownPreview({
+  documentId,
+  content,
+  onLinkClick,
+  onCheckboxToggle,
+  onEmbed,
+  onGetLinkPreview,
+  onImageClick,
+  theme,
+  settings,
+  onContentChange,
+  constrainWidth = true,
+  comments,
+  pendingComment,
+  activeCommentId,
+  onCommentClick,
+}: MarkdownPreviewProps) {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [debouncedContent, setDebouncedContent] = useState("");
+  const documentIdRef = useRef(documentId);
+  documentIdRef.current = documentId;
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const [processorVersion, setProcessorVersion] = useState(0);
+
+  const [themeMode, setThemeMode] = useState(() =>
+      document.documentElement.getAttribute("data-theme-mode") ||
+      (theme === "dark" ? "dark" : "light")
+  );
+
+  useEffect(() => {
+    const handleProcessorsChanged = () => setProcessorVersion((version) => version + 1);
+    window.addEventListener('obsidian:markdown-processors-changed', handleProcessorsChanged);
+    return () => window.removeEventListener('obsidian:markdown-processors-changed', handleProcessorsChanged);
+  }, []);
+
+  useEffect(() => {
+    let cancelIdle: (() => void) | null = null;
+    const handler = setTimeout(() => {
+      cancelIdle = schedulePreviewIdleWork(() => {
+        setDebouncedContent(content);
+      }, 500);
+    }, content.length > 8000 ? 80 : 0);
+    
+    return () => {
+      clearTimeout(handler);
+      cancelIdle?.();
+    };
+  }, [content]);
+  
+  // Keep themeMode in sync with the global data-theme-mode attribute
+  useEffect(() => {
+    const root = document.documentElement;
+
+    const sync = () => {
+      const next =
+        root.getAttribute("data-theme-mode") ||
+        (theme === "dark" ? "dark" : "light");
+      setThemeMode(next);
+    };
+
+    sync();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === "attributes" && m.attributeName === "data-theme-mode") {
+          sync();
+          break;
+        }
+      }
+    });
+
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-theme-mode"],
+    });
+
+    return () => observer.disconnect();
+  }, [theme]);
+
+
+  const [linkPreview, setLinkPreview] = useState<{
+    noteName: string;
+    content: string | null;
+    position: { x: number; y: number };
+  } | null>(null);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Process callouts (Obsidian-style admonitions)
+  // Process callouts (Obsidian-style admonitions with docs website design)
+  const processCallouts = (md: string): string => {
+    const lines = md.split(/\r?\n/);
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const headerMatch = line.match(/^[ \t]*>+[ \t]*\[!(\w+)\]([+-]?)(?:[ \t]+(.*?))?[ \t]*$/i);
+
+      if (headerMatch) {
+        const calloutType = headerMatch[1].toLowerCase();
+        const foldChar = headerMatch[2];
+        const customTitle = headerMatch[3]?.trim();
+        const displayTitle = customTitle || calloutType.toUpperCase();
+        const isFoldable = foldChar === "+" || foldChar === "-";
+        const isCollapsed = foldChar === "-";
+        const isCaution = calloutType === "caution" || calloutType === "warning";
+
+        const bodyLines: string[] = [];
+        i++;
+        while (i < lines.length) {
+          const nextLine = lines[i];
+          const quoteLineMatch = nextLine.match(/^[ \t]*>+[ \t]?(.*)$/);
+          if (quoteLineMatch) {
+            if (/^[ \t]*>+[ \t]*\[!\w+\]/i.test(nextLine)) {
+              break;
+            }
+            bodyLines.push(quoteLineMatch[1]);
+            i++;
+          } else {
+            break;
+          }
+        }
+
+        const bodyMarkdown = bodyLines.join("\n").trim();
+        let bodyHtml = "";
+        if (bodyMarkdown) {
+          try {
+            bodyHtml = marked.parse(protectInvalidMath(bodyMarkdown), { async: false, breaks: true }) as string;
+          } catch {
+            bodyHtml = `<p>${bodyMarkdown}</p>`;
+          }
+        }
+
+        const foldSvg = '<span class="callout-fold" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>';
+        const foldHtml = isFoldable ? foldSvg : "";
+        const calloutHtml = `<div class="docs-note ${isCaution ? "is-caution" : ""} callout callout-${calloutType}" data-callout="${calloutType}" data-foldable="${isFoldable}" data-collapsed="${isCollapsed}">\n` +
+          `  <strong class="callout-title"><span class="callout-title-text">${displayTitle}</span>${foldHtml}</strong>\n` +
+          `  <div class="callout-content">\n${bodyHtml}  </div>\n` +
+          `</div>`;
+
+        result.push(calloutHtml);
+      } else {
+        result.push(line);
+        i++;
+      }
+    }
+
+    return result.join("\n");
+  };
+
+  // Close callout blocks
+  const closeCallouts = (html: string): string => {
+    return html.replace(/<blockquote[^>]*>\s*(<div class="[^"]*docs-note[\s\S]*?<\/div>\s*<\/div>)\s*<\/blockquote>/g, "$1");
+  };
+
+  // Generate premium HTML wrapper card for URL previews
+  const getUrlPreviewMarkup = useCallback((url: string, currentTheme: string, customAttrs?: { width?: string; height?: string; style?: string }) => {
+    const isNoEmbed = url.includes("#no-embed");
+    const urlWithHashCleaned = url.replace(/#no-embed/g, "").trim();
+    const cleanUrl = cleanEmbedUrl(urlWithHashCleaned);
+
+    // Extract custom dimensions from hash/fragment (e.g. #width=600&height=175)
+    let hashAttrs: { width?: string; height?: string } = {};
+    try {
+      const hashIndex = cleanUrl.indexOf("#");
+      if (hashIndex !== -1) {
+        const hash = cleanUrl.substring(hashIndex);
+        const widthMatch = hash.match(/[#&]width=([^&]+)/i);
+        const heightMatch = hash.match(/[#&]height=([^&]+)/i);
+        if (widthMatch) hashAttrs.width = decodeURIComponent(widthMatch[1]);
+        if (heightMatch) hashAttrs.height = decodeURIComponent(heightMatch[1]);
+      }
+    } catch {}
+
+    // Strip hash from cleanUrl before resolving to avoid regex matches breaking
+    const cleanUrlWithoutHash = cleanUrl.split("#")[0];
+    const displayDomain = getDisplayDomain(cleanUrlWithoutHash);
+    
+    // Resolve smart embed settings
+    const config = getSmartEmbed(cleanUrlWithoutHash);
+    const embedSrc = config.src;
+    
+    const finalStyle = customAttrs?.style;
+    const finalWidth = customAttrs?.width || hashAttrs.width;
+    const finalHeight = customAttrs?.height || hashAttrs.height;
+
+    // Check if the registry config or overrides define dimensions
+    const hasCustomWidth = !!finalWidth || (config.attrs.style && (!!config.attrs.style.width || !!config.attrs.style.maxWidth));
+    const hasCustomHeight = !!finalHeight || (config.attrs.style && !!config.attrs.style.height);
+
+    let cardStyle = "";
+    let bodyStyle = "";
+
+    if (finalStyle) {
+      cardStyle = finalStyle;
+    } else {
+      if (hasCustomWidth) {
+        const rawWidth = finalWidth || (config.attrs.style ? (config.attrs.style.width || config.attrs.style.maxWidth) : "");
+        if (rawWidth) {
+          const w = String(rawWidth).endsWith('%') || String(rawWidth).endsWith('px') || String(rawWidth).endsWith('vh') || String(rawWidth).endsWith('vw') ? rawWidth : `${rawWidth}px`;
+          cardStyle = `max-width: ${w}; width: 100%; margin: 8px auto;`;
+        }
+      }
+      if (hasCustomHeight) {
+        const rawHeight = finalHeight || (config.attrs.style ? config.attrs.style.height : "");
+        if (rawHeight) {
+          const h = String(rawHeight).endsWith('%') || String(rawHeight).endsWith('px') || String(rawHeight).endsWith('vh') || String(rawHeight).endsWith('vw') ? rawHeight : `${rawHeight}px`;
+          bodyStyle = `height: ${h}; aspect-ratio: auto;`;
+        }
+      }
+    }
+
+    const sandboxAttr = config.attrs.sandbox ? `sandbox="${config.attrs.sandbox}"` : '';
+    const embedAttrs = `${config.attrs.allow ? `allow="${config.attrs.allow}"` : ''} ${config.attrs.allowFullScreen ? 'allowfullscreen' : ''} ${sandboxAttr}`;
+    const badge = config.badge;
+    const faviconUrl = `https://www.google.com/s2/favicons?domain=${displayDomain}&sz=32`;
+
+    if (isNoEmbed) {
+      // Link only mode
+      return `<div class="url-preview-card link-only" data-url="${url}" style="position: relative; ${cardStyle}">
+        <div class="url-preview-header">
+          <div class="url-preview-info">
+            <img class="url-preview-favicon" src="${faviconUrl}" alt="">
+            <span class="url-preview-title">${displayDomain}</span>
+          </div>
+          <div class="url-preview-actions">
+            <span class="url-preview-badge">${badge} (Link)</span>
+            <a class="url-preview-action-btn" href="${cleanUrl}" target="_blank" rel="noopener noreferrer" title="Open in new tab">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </a>
+          </div>
+        </div>
+        <div class="url-preview-link-body" style="padding: 12px 16px 12px 44px; font-size: 13px;">
+          <a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-color, #3b82f6); text-decoration: underline; word-break: break-all;">
+            ${cleanUrl}
+          </a>
+        </div>
+        <button class="url-preview-toggle-floating url-preview-toggle-btn" title="Convert to Iframe Embed">
+          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        </button>
+      </div>`;
+    }
+
+    // Embed mode
+    return `<div class="url-preview-card embed-only" data-url="${url}" style="position: relative; ${cardStyle}">
+      <div class="url-preview-body" style="position: relative; ${bodyStyle}">
+        <iframe class="url-preview-iframe" src="${embedSrc}" ${embedAttrs} style="height:100%; width:100%; border: none;"></iframe>
+      </div>
+      <button class="url-preview-toggle-floating url-preview-toggle-btn" title="Convert to Link only">
+        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+      </button>
+    </div>`;
+  }, []);
+
+  // Configure marked for GFM (GitHub Flavored Markdown) support
+  const renderedHtml = useMemo(() => {
+    if (!debouncedContent) return "";
+
+    let processed = debouncedContent;
+    // Protect fenced code blocks first
+    const protectedCode = protectFencedCodeBlocks(processed);
+    processed = protectedCode.text;
+
+    // Protect inline code blocks next
+    const protectedInline = protectInlineCode(processed);
+    processed = protectedInline.text;
+
+    // Convert ==highlight== to <mark>highlight</mark> (multiline and boundary-aware)
+    processed = processed.replace(
+      /(^|\s)==([^\s=](?:(?:[^\n=]|\n(?!\n))*?[^\s=])?)==(?=\s|[.,;:!?\x27\x22]|$)/g,
+      "$1<mark>$2</mark>"
+    );
+
+    // Restore inline code, but keep fenced code blocks protected
+    processed = protectedInline.restore(processed);
+    
+
+    // Swap block markdown markers and opening HTML tags to ensure correct rendering (e.g. <span style="...">## Heading</span> -> ## <span style="...">Heading</span>)
+    processed = processed.replace(
+      /^([ \t]*)(<[a-zA-Z]+[^>]*>)(#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s+)/gm,
+      "$1$3$2"
+    );
+
+    processed = normalizeMarkdownTables(processed);
+
+    // Convert url to preview (iframe) - standalone URLs to ANY URL
+    processed = processed.replace(
+      /^(?:[ \t]*)(https?:\/\/[^\s]+)(?:[ \t]*)$/gm,
+      (match, url) => `<div class="url-preview-placeholder" data-url="${url.trim()}"></div>`
+    );
+
+    // Process embeds ![[note]] before other processing
+    processed = processed.replace(
+      /!\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g,
+      (match, noteName, heading, displayText) => {
+        const cleanName = (noteName || "").trim();
+        const isImage = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(cleanName);
+        if (isImage) {
+          let width: number | undefined;
+          if (displayText) {
+            const dimMatch = displayText.trim().match(/^(\d+)(?:x\d+)?$/);
+            if (dimMatch) {
+              width = Math.max(80, Math.min(1600, parseInt(dimMatch[1], 10)));
+            }
+          }
+          const styleParts: string[] = ["max-width:100%", "height:auto", "box-sizing:border-box"];
+          if (width && width > 0) {
+            styleParts.push(`max-width:${Math.round(width)}px`);
+            styleParts.push("width:100%");
+          }
+          const resolvedSrc = resolveVaultImageSrc(cleanName);
+          const safeSrc = resolvedSrc.replace(/"/g, "&quot;");
+          const safeAlt = (displayText || cleanName).replace(/"/g, "&quot;");
+          return `<img src="${safeSrc}" alt="${safeAlt}" style="${styleParts.join(";")}" />`;
+        }
+        const embedContent = onEmbed ? onEmbed(noteName) : null;
+        if (embedContent) {
+          return `<div class="embed-container" data-embed="${noteName}">
+            <div class="embed-title">${noteName}${heading ? " › " + heading : ""}</div>
+            <div class="embed-content">${embedContent}</div>
+          </div>`;
+        }
+        return `<div class="embed-container embed-missing" data-embed="${noteName}">
+          <span class="embed-icon">📄</span> ${displayText || noteName} (not found)
+        </div>`;
+      },
+    );
+
+    // Process wiki-links with alias and heading support
+    processed = processed.replace(
+      /\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g,
+      (match, noteName, heading, alias) => {
+        const displayText =
+          alias || (heading ? `${noteName} › ${heading}` : noteName);
+        const dataHeading = heading ? ` data-heading="${heading}"` : "";
+        return `<a class="wiki-link" data-link="${noteName}"${dataHeading} href="#">${displayText}</a>`;
+      },
+    );
+
+    // Process tags (ignoring hex color codes)
+    processed = processed.replace(
+      /(^|\s)(#[a-zA-Z][a-zA-Z0-9_/-]*)/g,
+      (match, prefix, tag) => {
+        const hexColorRegex = /^#[a-fA-F0-9]{3,4}$|^#[a-fA-F0-9]{6}$|^#[a-fA-F0-9]{8}$/;
+        if (hexColorRegex.test(tag)) {
+          return match;
+        }
+        return `${prefix}<span class="tag" data-tag="${tag}">${tag}</span>`;
+      }
+    );
+
+    // Render markdown image metadata controls
+    processed = processed.replace(
+      /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+      (match, alt, src, title) => {
+        const { width, crop, offsetX, offsetY } = parseImageRenderMeta(title, alt);
+        const styleParts: string[] = ["max-width:100%", "height:auto", "box-sizing:border-box"];
+        if (width && width > 0) {
+          styleParts.push(`max-width:${Math.round(width)}px`);
+          styleParts.push("width:100%");
+        }
+        if (crop === "cover") {
+          styleParts.push("aspect-ratio:4 / 3");
+          styleParts.push("object-fit:cover");
+          styleParts.push(`object-position:calc(50% + ${Math.round(offsetX)}px) calc(50% + ${Math.round(offsetY)}px)`);
+        }
+        const safeAlt = String(alt).replace(/"/g, "&quot;");
+        const resolvedSrc = resolveVaultImageSrc(String(src));
+        const safeSrc = resolvedSrc.replace(/"/g, "&quot;");
+        return `<img src="${safeSrc}" alt="${safeAlt}" style="${styleParts.join(";")}" />`;
+      },
+    );
+
+    // Process callouts
+    processed = processCallouts(processed);
+
+    // Checkboxes
+    let lineNum = 0;
+    processed = processed.replace(
+      /^(\s*[-*+]\s+)\[([ xX])\]/gm,
+      (match, prefix, checked) => {
+        const isChecked = checked.toLowerCase() === "x";
+        return `${prefix}<input type="checkbox" class="task-checkbox" data-line="${lineNum++}" ${isChecked ? "checked" : ""}>`;
+      },
+    );
+
+    if (settings?.propertiesInDocument === "hidden") {
+      processed = processed.replace(/^---\n[\s\S]*?\n---\n?/, "");
+    }
+
+    // Restore fenced code blocks last
+    processed = protectedCode.restore(processed)
+
+    // Parse markdown to HTML
+    let html = marked.parse(protectInvalidMath(processed), {
+      gfm: true,
+      breaks: settings?.strictLineBreaks !== true,
+    }) as string;
+    html = closeCallouts(html);
+    html = html.replace(
+      /<li>\s*(<input\b[^>]*class="task-checkbox"[^>]*>)/g,
+      '<li class="task-list-item">$1',
+    );
+
+    // --- Unified Smart Embed Resolver ---
+    // Handle both raw iframes and Twitter blockquotes
+    const themeValue = themeMode;
+
+    // Fix Twitter theme in the HTML string itself
+    html = html.replace(/<blockquote class="twitter-tweet"/g, `<blockquote class="twitter-tweet" data-theme="${themeValue}"`);
+
+    // Parse URL preview placeholders into premium cards and strip any wrapping paragraphs
+    html = html.replace(
+      /(?:<p>)?<div class="url-preview-placeholder" data-url="([^"]+)"><\/div>(?:<\/p>)?/g,
+      (match, url) => {
+        return getUrlPreviewMarkup(url, themeMode);
+      }
+    );
+
+    // Handle all other raw empty iframes via the registry (ignore already-wrapped ones)
+    html = html.replace(/<iframe\s+([^>]*src="([^"]+)"[^>]*)><\/iframe>/g, (match, attrs, src) => {
+      if (attrs.includes("url-preview-iframe")) {
+        return match;
+      }
+      
+      // Extract width, height, and style attributes from attrs
+      const widthMatch = attrs.match(/width=(["'])(.*?)\1/i);
+      const heightMatch = attrs.match(/height=(["'])(.*?)\1/i);
+      const styleMatch = attrs.match(/style=(["'])(.*?)\1/i);
+      
+      const customAttrs = {
+        width: widthMatch ? widthMatch[2] : undefined,
+        height: heightMatch ? heightMatch[2] : undefined,
+        style: styleMatch ? styleMatch[2] : undefined,
+      };
+
+      return getUrlPreviewMarkup(src, themeMode , customAttrs);
+    });
+
+    // Sanitize
+    const sanitized = sanitizePreviewHtml(html);
+
+    // Apply comment highlights to rendered preview
+    return applyCommentHighlightsToHtml(sanitized, debouncedContent, comments, pendingComment, activeCommentId);
+  }, [debouncedContent, onEmbed, themeMode, getSmartEmbed, getUrlPreviewMarkup, comments, pendingComment, activeCommentId]);
+
+  // Handle clicks on wiki-links, tags, checkboxes, and comment highlights
+  useEffect(() => {
+    const container = previewRef.current;
+    if (!container) return;
+
+    const handleClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+
+      // Handle comment highlight clicks to open the comment box
+      const commentMark = target.closest(".cm-comment-highlight");
+      if (commentMark) {
+        const commentId = commentMark.getAttribute("data-comment-id");
+        if (commentId && onCommentClick) {
+          onCommentClick(commentId);
+        }
+      }
+
+      // Handle image click for fullscreen preview
+      if (target.tagName === "IMG" && !target.classList.contains("yt-poster-img") && onImageClick) {
+        const image = target as HTMLImageElement;
+        if (image.src) {
+          e.preventDefault();
+          e.stopPropagation();
+          onImageClick(image.src, image.alt || "Image");
+          return;
+        }
+      }
+
+      // Handle URL preview toggle mode (iframe vs link)
+      const toggleBtn = target.closest(".url-preview-toggle-btn");
+      if (toggleBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = toggleBtn.closest(".url-preview-card");
+        const cardUrl = card?.getAttribute("data-url");
+        if (card && cardUrl && onContentChange) {
+          const isCurrentlyLinkOnly = card.classList.contains("link-only");
+          const nextContent = toggleUrlInMarkdown(contentRef.current, cardUrl, !isCurrentlyLinkOnly);
+          onContentChange(nextContent);
+        }
+        return;
+      }
+
+      // Handle wiki-link clicks
+      if (target.classList.contains("wiki-link")) {
+        e.preventDefault();
+        e.stopPropagation();
+        const linkName = target.getAttribute("data-link");
+        const heading = target.getAttribute("data-heading");
+        if (linkName) {
+          onLinkClick(linkName, heading || undefined);
+        }
+      }
+
+      // Handle checkbox clicks
+      if (target.classList.contains("task-checkbox")) {
+        const lineIndex = parseInt(target.getAttribute("data-line") || "0", 10);
+        const isChecked = (target as HTMLInputElement).checked;
+        if (onCheckboxToggle) {
+          onCheckboxToggle(lineIndex, isChecked);
+        }
+      }
+
+      // Handle callout fold toggle
+      const foldTrigger = target.closest(".callout-title") || target.closest(".callout-fold");
+      if (foldTrigger) {
+        const callout = foldTrigger.closest(".callout");
+        if (callout && callout.getAttribute("data-foldable") === "true") {
+          const isCollapsed = callout.getAttribute("data-collapsed") === "true";
+          callout.setAttribute(
+            "data-collapsed",
+            isCollapsed ? "false" : "true",
+          );
+        }
+      }
+    };
+
+    const handleCommentHover = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const commentMark = target.closest(".cm-comment-highlight");
+      const commentId = commentMark?.getAttribute("data-comment-id") || null;
+      if (!commentId) return;
+      window.dispatchEvent(
+        new CustomEvent("netherwrite:hover-comment", {
+          detail: { commentId },
+        })
+      );
+    };
+
+    const handleCommentLeave = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".cm-comment-highlight")) return;
+      window.dispatchEvent(
+        new CustomEvent("netherwrite:hover-comment", {
+          detail: { commentId: null },
+        })
+      );
+    };
+
+    container.addEventListener("click", handleClick);
+    container.addEventListener("mouseover", handleCommentHover);
+    container.addEventListener("mouseout", handleCommentLeave);
+    return () => {
+      container.removeEventListener("click", handleClick);
+      container.removeEventListener("mouseover", handleCommentHover);
+      container.removeEventListener("mouseout", handleCommentLeave);
+    };
+  }, [onLinkClick, onCheckboxToggle, onImageClick, onContentChange, onCommentClick]);
+
+  // Handle link hover for preview
+  useEffect(() => {
+    const container = previewRef.current;
+    if (!container || !onGetLinkPreview || settings?.corePagePreview === false || settings?.pagePreviewReading === false) return;
+
+    const handleMouseEnter = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains("wiki-link")) {
+        if (settings?.pagePreviewRequireCtrl && !e.ctrlKey && !e.metaKey) return;
+        const linkName = target.getAttribute("data-link");
+        if (!linkName) return;
+
+        // Clear any existing timeout
+        if (hoverTimeoutRef.current) {
+          clearTimeout(hoverTimeoutRef.current);
+        }
+
+        // Delay showing preview
+        hoverTimeoutRef.current = setTimeout(() => {
+          const previewContent = onGetLinkPreview(linkName);
+          const rect = target.getBoundingClientRect();
+          setLinkPreview({
+            noteName: linkName,
+            content: previewContent,
+            position: { x: rect.left, y: rect.bottom + 5 },
+          });
+        }, 400); // 400ms delay before showing
+      }
+    };
+
+    const handleMouseLeave = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains("wiki-link")) {
+        if (hoverTimeoutRef.current) {
+          clearTimeout(hoverTimeoutRef.current);
+        }
+        // Small delay before hiding to allow moving to preview
+        setTimeout(() => {
+          setLinkPreview(null);
+        }, 100);
+      }
+    };
+
+    container.addEventListener("mouseover", handleMouseEnter);
+    container.addEventListener("mouseout", handleMouseLeave);
+
+    return () => {
+      container.removeEventListener("mouseover", handleMouseEnter);
+      container.removeEventListener("mouseout", handleMouseLeave);
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, [onGetLinkPreview, settings?.corePagePreview, settings?.pagePreviewReading, settings?.pagePreviewRequireCtrl]);
+
+  // Render preview content for link preview popup
+  const renderPreviewContent = useCallback((content: string | null) => {
+    if (!content) return '<p class="preview-empty">Note not found</p>';
+
+    // Remove frontmatter
+    let text = content.replace(/^---[\s\S]*?---\s*/m, "");
+
+    // Truncate to ~500 chars for preview
+    if (text.length > 500) {
+      text = text.slice(0, 500) + "...";
+    }
+
+    // Render markdown
+    const html = marked.parse(protectInvalidMath(text), { async: false, breaks: true }) as string;
+    return DOMPurify.sanitize(html);
+  }, []);
+
+  // Use a ref to track the last rendered HTML to avoid unnecessary DOM updates that reload iframes
+  const lastHtmlRef = useRef<string>("");
+
+  // Manually update the DOM and upgrade iframes injected by plugins
+  useEffect(() => {
+    if (!previewRef.current) return;
+    let processorCleanup: (() => void) | undefined;
+    let cancelled = false;
+    let observer: MutationObserver | null = null;
+
+    if (lastHtmlRef.current !== renderedHtml ||processorVersion > 0) {
+      previewRef.current.innerHTML = renderedHtml;
+      lastHtmlRef.current = renderedHtml;
+      bindPreviewMediaFallbacks(previewRef.current);
+      previewRef.current.querySelectorAll<HTMLElement>("pre > code.language-netherwrite-resource").forEach((code) => {
+        const resource = parseResourceJson(code.textContent || "");
+        if (!resource) return;
+        const source = resourceBlocks(contentRef.current).find((block) => block.resource.url === resource.url && block.resource.serverId === resource.serverId);
+        const sourceDocumentId = documentIdRef.current;
+        const original = source ? contentRef.current.slice(source.from, source.to) : "";
+        const replace = (updated?: ExternalResource) => {
+          if (!onContentChange || !original || sourceDocumentId !== documentIdRef.current) return;
+          const matches = resourceBlocks(contentRef.current).filter((block) => contentRef.current.slice(block.from, block.to) === original);
+          if (matches.length !== 1) return;
+          const block = matches[0];
+          onContentChange(contentRef.current.slice(0, block.from) + (updated ? serializeExternalResource(updated) : "") + contentRef.current.slice(block.to));
+        };
+        code.parentElement?.replaceWith(createResourceCard(resource, () => openResource(resource, onContentChange ? replace : undefined), onContentChange ? { update: replace, remove: () => replace() } : {}));
+      });
+    }
+    
+    // Function to upgrade YouTube iframes into HD Posters
+    const upgradeYouTubeIframe = (iframe: HTMLIFrameElement) => {
+      const src = iframe.src || "";
+      if (!src.includes("youtube.com") && !src.includes("youtu.be")) return;
+      if (iframe.dataset.hdPosterApplied || iframe.dataset.activePlayer === "true") return;
+
+      const videoId = src.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?]+)/)?.[1];
+      if (!videoId || !/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return;
+
+      iframe.dataset.hdPosterApplied = "true";
+
+      const hdThumb = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+      const hqThumb = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "yt-hd-poster";
+      wrapper.style.cssText = "position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: #000; cursor: pointer; margin: 16px 0;";
+
+      const poster = document.createElement("img");
+      poster.className = "yt-poster-img";
+      poster.src = hdThumb;
+      poster.style.cssText = "position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transition: opacity 0.2s;";
+      poster.addEventListener("error", () => {
+        poster.src = hqThumb;
+      });
+
+      const playBadge = document.createElement("div");
+      playBadge.style.cssText = "position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 68px; height: 48px; background: rgba(255, 0, 0, 0.9); border-radius: 12px; display: flex; align-items: center; justify-content: center; pointer-events: none; box-shadow: none;";
+      playBadge.innerHTML = `<svg viewBox="0 0 24 24" style="width: 32px; height: 32px; fill: white;"><path d="M8 5v14l11-7z"/></svg>`;
+
+      wrapper.append(poster, playBadge);
+      wrapper.addEventListener("mouseover", () => {
+        poster.style.opacity = "0.8";
+      });
+      wrapper.addEventListener("mouseout", () => {
+        poster.style.opacity = "1";
+      });
+
+      wrapper.addEventListener("click", () => {
+        const player = document.createElement("iframe");
+        player.dataset.activePlayer = "true";
+        player.className = "url-preview-iframe";
+        player.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&vq=hd1080`;
+        player.allow = "fullscreen; autoplay; clipboard-write; encrypted-media; picture-in-picture";
+        player.allowFullscreen = true;
+        player.style.cssText = "width:100%; height:100%; border:none; border-radius: 12px;";
+        wrapper.replaceChildren(player);
+      });
+
+      if (iframe.parentNode) {
+        iframe.parentNode.replaceChild(wrapper, iframe);
+      }
+    };
+
+    const cancelIdle = schedulePreviewIdleWork(() => {
+      if (cancelled || !previewRef.current) return;
+
+      installHeadingFoldControls(previewRef.current);
+
+      // Handle Mermaid diagrams during idle time
+      const mermaidBlocks = previewRef.current.querySelectorAll(
+        "code.language-mermaid",
+      );
+      const existingMermaid = previewRef.current.querySelectorAll(".mermaid");
+
+      if (mermaidBlocks.length > 0 || existingMermaid.length > 0) {
+        void (async () => {
+          try {
+            const { default: mermaid } = await import("mermaid");
+
+            if (cancelled || !previewRef.current) return;
+
+            const isDarkTheme = themeMode === "dark" || themeMode.startsWith("dark-") || themeMode.includes("dark");
+
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: isDarkTheme ? "dark" : "default",
+              securityLevel: "strict",
+              fontSize: 13,
+              maxTextSize: 1000000,
+              maxEdges: 10000,
+              mindmap: {
+                useMaxWidth: true,
+                padding: 10,
+              },
+              flowchart: {
+                padding: 12,
+                nodeSpacing: 25,
+                rankSpacing: 25,
+                useMaxWidth: false,
+              },
+              sequence: {
+                useMaxWidth: false,
+              },
+              gantt: {
+                useMaxWidth: true,
+              },
+            });
+
+            // Sanitize Mermaid source to fix common LLM generation errors
+            const sanitizeMermaidSource = (raw: string): string => {
+              let s = raw;
+              // Fix literal escaped newlines (LLM sometimes outputs "\\n" as text)
+              s = s.replace(/\\n/g, "\n");
+
+              const rawLines = s.split("\n");
+              // Safeguard against mega-diagrams (> 1000 lines) with duplicate nodes that cause exponential D3 layout loops
+              if (rawLines.length > 1000) {
+                const isMindmap = /^\s*mindmap\b/i.test(s);
+                if (isMindmap) {
+                  const seen = new Set<string>();
+                  const pruned: string[] = [];
+                  for (const line of rawLines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+                    if (pruned.length < 800 || !seen.has(trimmed)) {
+                      seen.add(trimmed);
+                      pruned.push(line);
+                    }
+                    if (pruned.length >= 950) break;
+                  }
+                  s = pruned.join("\n");
+                } else {
+                  s = rawLines.slice(0, 950).join("\n");
+                }
+              }
+
+              // Check if diagram is a flowchart/graph before applying flowchart-specific node shape transformations
+              const isFlowchart = /^\s*(?:---[\s\S]*?---\s*)?(?:graph|flowchart)\b/i.test(s);
+
+              if (isFlowchart) {
+                // Fix wrong arrow syntax: single-dash -> should be --> (without mangling dotted links -.-> or existing -->)
+                s = s.replace(/(?<![\.-])->/g, "-->");
+                // Convert Unicode arrows like → or ➔ to -->, and ⇒ to ==>
+                s = s.replace(/→|➔/g, "-->");
+                s = s.replace(/⇒/g, "==>");
+
+                const escapeMermaidLabel = (label: string): string => {
+                  const BR = '\x00BR\x00';
+                  let str = label.replace(/<br\s*\/?>/gi, BR);
+                  // Replace inner double quotes with single quotes to prevent breaking outer double-quoted string boundary
+                  str = str.replace(/"/g, "'");
+                  // Escape structural brackets and comparison operators with standard HTML entities
+                  str = str
+                    .replace(/\[/g, '&lsqb;')
+                    .replace(/\]/g, '&rsqb;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                  return str.replace(new RegExp(BR, 'g'), '<br/>');
+                };
+
+                s = s.replace(/\b([a-zA-Z0-9_-]+)\[((?:(?!-->|---|==>)[^\n])+)\]/g, (match, id, label) => {
+                  let inner = label.trim();
+                  if (inner.startsWith('"') && inner.endsWith('"')) {
+                    inner = inner.slice(1, -1);
+                  }
+                  return `${id}["${escapeMermaidLabel(inner)}"]`;
+                });
+                s = s.replace(/\b([a-zA-Z0-9_-]+)\(((?:(?!-->|---|==>)[^\n])+)\)/g, (match, id, label) => {
+                  let inner = label.trim();
+                  if (inner.startsWith('"') && inner.endsWith('"')) {
+                    inner = inner.slice(1, -1);
+                  }
+                  return `${id}("${escapeMermaidLabel(inner)}")`;
+                });
+                s = s.replace(/\b([a-zA-Z0-9_-]+)\{((?:(?!-->|---|==>)[^\n])+)\}/g, (match, id, label) => {
+                  let inner = label.trim();
+                  if (inner.startsWith('"') && inner.endsWith('"')) {
+                    inner = inner.slice(1, -1);
+                  }
+                  return `${id}\{"${escapeMermaidLabel(inner)}"}`;
+                });
+
+                // Fix subgraph syntax errors: convert `subgraph "Title"` to `subgraph sub_1 ["Title"]`
+                let subgraphCounter = 0;
+                s = s.replace(/subgraph\s+"([^"]+)"/g, (match, title) => {
+                  subgraphCounter++;
+                  return `subgraph sub_${subgraphCounter} ["${title}"]`;
+                });
+                s = s.replace(/subgraph\s+([a-zA-Z0-9_\s\-\(\)\^]+)(?:\r?\n|$)/g, (match, title) => {
+                  const trimmed = title.trim();
+                  if (!trimmed || trimmed.includes("[")) return match;
+                  subgraphCounter++;
+                  return `subgraph sub_${subgraphCounter} ["${trimmed}"]\n`;
+                });
+              }
+
+              return s;
+            };
+
+            // Convert any remaining <pre><code class="language-mermaid">
+            mermaidBlocks.forEach((block) => {
+              const pre = block.parentElement;
+              if (pre?.tagName === "PRE") {
+                const source = sanitizeMermaidSource(block.textContent || "");
+                const diagram = document.createElement("div");
+                diagram.className = "mermaid";
+                diagram.dataset.mermaidSource = source;
+                diagram.textContent = source;
+                pre.replaceWith(diagram);
+              }
+            });
+
+            const nodes = Array.from(
+              previewRef.current.querySelectorAll(".mermaid"),
+            ) as HTMLElement[];
+
+            const renderMermaidError = (node: HTMLElement, source: string, msg: string) => {
+              node.setAttribute("data-processed", "true");
+              const escapedSource = source.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              node.innerHTML = `<div style="width:100%; border:1px solid var(--border-subtle); border-radius:6px; overflow:hidden; background:var(--bg-secondary); margin:0.5rem 0;">
+                <div style="background:rgba(239,68,68,0.12); color:var(--text-secondary); padding:6px 12px; font-size:12px; font-weight:500; border-bottom:1px solid var(--border-subtle);">
+                  Mermaid diagram error (${msg}) — showing raw source
+                </div>
+                <pre style="margin:0; padding:12px; font-size:12px; overflow-x:auto; background:var(--bg-secondary); color:var(--text-primary);"><code>${escapedSource}</code></pre>
+              </div>`;
+            };
+
+            // Process each diagram individually to isolate syntax errors and prevent main-thread locks
+            for (let i = 0; i < nodes.length; i++) {
+              if (cancelled || !previewRef.current) break;
+              const node = nodes[i];
+              if (node.getAttribute("data-processed") === "true") continue;
+
+              const rawSource =
+                node.dataset.mermaidSource ||
+                node.getAttribute("data-mermaid-source") ||
+                node.textContent ||
+                "";
+              const source = sanitizeMermaidSource(rawSource);
+              if (!source.trim()) continue;
+
+              node.dataset.mermaidSource = source;
+
+              try {
+                // Yield to main thread between diagrams so UI repaints and stays 100% responsive
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                if (cancelled || !previewRef.current) break;
+
+                const isValid = await mermaid.parse(source, { suppressErrors: true });
+                if (!isValid) {
+                  renderMermaidError(node, source, "syntax check failed");
+                  continue;
+                }
+
+                const id = `mermaid-id-${i}-${Math.random().toString(36).slice(2, 7)}`;
+
+                // 2.5s layout computation timeout safeguard
+                const renderPromise = mermaid.render(id, source);
+                const timeoutPromise = new Promise<{ svg: string }>((_, reject) =>
+                  setTimeout(() => reject(new Error("Layout calculation timed out (> 2.5s)")), 2500)
+                );
+
+                const { svg } = await Promise.race([renderPromise, timeoutPromise]);
+                if (cancelled || !previewRef.current) break;
+
+                node.innerHTML = `<div class="mermaid-canvas-wrapper">${svg}</div>`;
+                node.setAttribute("data-processed", "true");
+
+                const canvasWrapper = node.querySelector(".mermaid-canvas-wrapper") as HTMLElement;
+                let currentInlineScale = 1.0;
+
+                const svgEl = node.querySelector("svg");
+                if (svgEl) {
+                  (svgEl as SVGElement).style.width = "100%";
+                  (svgEl as SVGElement).style.maxWidth = "none";
+                  (svgEl as SVGElement).style.height = "auto";
+                  (svgEl as SVGElement).style.maxHeight = "none";
+                }
+
+                initializeInteractiveMermaid(node, source);
+
+                if (!node.querySelector(".mermaid-toolbar")) {
+                  const toolbar = document.createElement("div");
+                  toolbar.className = "mermaid-toolbar";
+                  toolbar.textContent = "Double-click diagram for fullscreen";
+                  node.appendChild(toolbar);
+
+                  // Prevent text selection inside diagram when double-clicking
+                  node.style.userSelect = "none";
+                  node.style.webkitUserSelect = "none";
+                  node.addEventListener("mousedown", (e) => {
+                    if (e.detail > 1) {
+                      e.preventDefault();
+                    }
+                  });
+
+                  node.addEventListener("dblclick", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Clear any text selection that might have happened
+                    window.getSelection()?.removeAllRanges();
+
+                    let html = canvasWrapper?.innerHTML || node.innerHTML;
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, "text/html");
+                    const svg = doc.querySelector("svg");
+                    if (svg) {
+                      svg.removeAttribute("width");
+                      svg.removeAttribute("height");
+                      svg.style.width = "100%";
+                      svg.style.height = "100%";
+                      svg.style.maxWidth = "none";
+                      svg.style.maxHeight = "none";
+                      html = svg.outerHTML;
+                    }
+
+                    setDiagramModal({
+                      svgHtml: html,
+                      rawSource: source,
+                    });
+                    zoomRef.current = 1;
+                    panRef.current = { x: 0, y: 0 };
+                  });
+                }
+              } catch (nodeErr: any) {
+                renderMermaidError(node, source, nodeErr?.message || "render error");
+              }
+            }
+          } catch (error: any) {
+            console.error("[MarkdownPreview] Mermaid initialization error:", error);
+          }
+        })();
+      }
+
+      // Handle Twitter embeds: if twit-blockquote exists, ensure widgets script is loaded and triggered
+      if (renderedHtml.includes("twitter-tweet")) {
+        // Apply theme to blockquotes before Twitter script processes them
+        const tweets = previewRef.current.querySelectorAll("blockquote.twitter-tweet");
+        tweets.forEach(tweet => {
+          tweet.setAttribute("data-theme", themeMode);
+        });
+
+        const injectTwitter = () => {
+          if (!(window as any).twttr) {
+            const script = document.createElement("script");
+            script.src = "https://platform.twitter.com/widgets.js";
+            script.async = true;
+            document.head.appendChild(script);
+          } else if ((window as any).twttr.widgets) {
+            (window as any).twttr.widgets.load(previewRef.current);
+          }
+        };
+        injectTwitter();
+      }
+
+      void runMarkdownPostProcessors(
+        previewRef.current,
+        (window as any).__oo_active_file || '',
+      ).then((cleanup) => {
+        if (cancelled) cleanup();
+        else processorCleanup = cleanup;
+      });
+
+      // Upgrade existing iframes
+      previewRef.current.querySelectorAll("iframe").forEach((el) => upgradeYouTubeIframe(el as HTMLIFrameElement));
+
+      // Watch for iframes injected asynchronously by plugins (like obsidian-convert-url-to-iframe)
+      observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType === 1) { // ELEMENT_NODE
+              const el = node as HTMLElement;
+              const iframes = el.tagName === "IFRAME" ? [el as HTMLIFrameElement] : Array.from(el.querySelectorAll("iframe"));
+              iframes.forEach(upgradeYouTubeIframe);
+            }
+          });
+        });
+      });
+
+      observer.observe(previewRef.current, { childList: true, subtree: true });
+    }, 700);
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+      processorCleanup?.();
+      observer?.disconnect();
+    };
+  }, [renderedHtml, themeMode, processorVersion]);
+
+  // Fullscreen Diagram Lightbox Modal State
+  const [diagramModal, setDiagramModal] = useState<{ svgHtml: string; rawSource: string } | null>(null);
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const lightboxCanvasRef = useRef<HTMLDivElement>(null);
+  const isPanningRef = useRef(false);
+  const startPanRef = useRef({ x: 0, y: 0 });
+
+  const updateSvgTransform = (zoom: number, pan: { x: number; y: number }) => {
+    if (lightboxCanvasRef.current) {
+      const svg = lightboxCanvasRef.current.querySelector("svg");
+      if (svg) {
+        svg.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+        svg.style.transformOrigin = "center center";
+        svg.style.transition = "none";
+        
+        if (typeof (svg as any).drawCustomLayout === "function") {
+          (svg as any).drawCustomLayout(zoom);
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (diagramModal && lightboxCanvasRef.current) {
+      setTimeout(() => {
+        updateSvgTransform(1, { x: 0, y: 0 });
+        initializeInteractiveMermaid(lightboxCanvasRef.current!, diagramModal.rawSource);
+      }, 0);
+    }
+  }, [diagramModal]);
+
+  const lightboxCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!diagramModal || !lightboxCardRef.current) return;
+    const el = lightboxCardRef.current;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const nextZoom = Math.min(10, Math.max(0.2, zoomRef.current * zoomFactor));
+      zoomRef.current = nextZoom;
+      const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+      if (zoomIndicator) {
+        zoomIndicator.textContent = `${Math.round(nextZoom * 100)}% Zoom`;
+      }
+      updateSvgTransform(nextZoom, panRef.current);
+    };
+
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", handleWheel);
+    };
+  }, [diagramModal]);
+
+  useEffect(() => {
+    if (!diagramModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDiagramModal(null);
+      } else if (e.key === "+" || e.key === "=") {
+        const nextZoom = Math.min(10, zoomRef.current + 0.3);
+        zoomRef.current = nextZoom;
+        const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+        if (zoomIndicator) zoomIndicator.textContent = `${Math.round(nextZoom * 100)}% Zoom`;
+        updateSvgTransform(nextZoom, panRef.current);
+      } else if (e.key === "-") {
+        const nextZoom = Math.max(0.2, zoomRef.current - 0.3);
+        zoomRef.current = nextZoom;
+        const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+        if (zoomIndicator) zoomIndicator.textContent = `${Math.round(nextZoom * 100)}% Zoom`;
+        updateSvgTransform(nextZoom, panRef.current);
+      } else if (e.key === "0") {
+        zoomRef.current = 1;
+        panRef.current = { x: 0, y: 0 };
+        const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+        if (zoomIndicator) zoomIndicator.textContent = `100% Zoom`;
+        updateSvgTransform(1, { x: 0, y: 0 });
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [diagramModal]);
+
+  return (
+    <>
+      <div
+        ref={previewRef}
+        className={markdownPreviewClass}
+        style={constrainWidth ? {
+          width: "100%",
+          maxWidth: "var(--reading-view-width)",
+          margin: "0 auto",
+        } : undefined}
+      />
+
+      {/* Fullscreen Interactive Diagram Lightbox Modal */}
+      {diagramModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 99999,
+            background: "rgba(10, 10, 12, 0.4)",
+            backdropFilter: "blur(8px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onClick={() => setDiagramModal(null)}
+        >
+          {/* Modal Card Content (85vw x 85vh) */}
+          <div
+            ref={lightboxCardRef}
+            style={{
+              width: "85vw",
+              height: "85vh",
+              background: "var(--bg-secondary, #18181c)",
+              borderRadius: "12px",
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.55)",
+              position: "relative",
+              overflow: "hidden",
+              userSelect: "none",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Controls (Floating Overlay) */}
+            <div
+              style={{
+                position: "absolute",
+                top: "20px",
+                left: "24px",
+                right: "24px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                zIndex: 10,
+                pointerEvents: "none",
+              }}
+            >
+              {/* Title & Zoom Info */}
+              <div 
+                style={{ 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "10px", 
+                  color: "var(--text-primary, #ffffff)", 
+                  fontWeight: 600, 
+                  fontSize: "13px",
+                  background: "rgba(20, 20, 25, 0.65)",
+                  backdropFilter: "blur(8px)",
+                  padding: "6px 12px",
+                  borderRadius: "8px",
+                  pointerEvents: "auto",
+                }}
+              >
+                <span>Mermaid Diagram Viewer</span>
+                <span
+                  id="lightbox-zoom-indicator"
+                  style={{ fontSize: "11px", color: "var(--text-muted, #a1a1aa)", background: "var(--bg-secondary, rgba(255,255,255,0.06))", padding: "1px 6px", borderRadius: "12px" }}
+                >
+                  100% Zoom
+                </span>
+              </div>
+
+              {/* Action Buttons */}
+              <div 
+                style={{ 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "6px",
+                  background: "rgba(20, 20, 25, 0.65)",
+                  backdropFilter: "blur(8px)",
+                  padding: "4px 6px",
+                  borderRadius: "8px",
+                  pointerEvents: "auto",
+                }}
+              >
+                <button
+                  onClick={() => {
+                    const nextZoom = Math.min(10, zoomRef.current + 0.3);
+                    zoomRef.current = nextZoom;
+                    const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+                    if (zoomIndicator) zoomIndicator.textContent = `${Math.round(nextZoom * 100)}% Zoom`;
+                    updateSvgTransform(nextZoom, panRef.current);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "var(--text-muted, #8a8a8f)", width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s ease" }}
+                  className="hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                  title="Zoom In"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                </button>
+                <button
+                  onClick={() => {
+                    const nextZoom = Math.max(0.2, zoomRef.current - 0.3);
+                    zoomRef.current = nextZoom;
+                    const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+                    if (zoomIndicator) zoomIndicator.textContent = `${Math.round(nextZoom * 100)}% Zoom`;
+                    updateSvgTransform(nextZoom, panRef.current);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "var(--text-muted, #8a8a8f)", width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s ease" }}
+                  className="hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                  title="Zoom Out"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                </button>
+                <button
+                  onClick={() => {
+                    zoomRef.current = 1;
+                    panRef.current = { x: 0, y: 0 };
+                    const zoomIndicator = document.getElementById("lightbox-zoom-indicator");
+                    if (zoomIndicator) zoomIndicator.textContent = `100% Zoom`;
+                    updateSvgTransform(1, { x: 0, y: 0 });
+                  }}
+                  style={{ background: "transparent", border: "none", color: "var(--text-muted, #8a8a8f)", width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s ease" }}
+                  className="hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                  title="Reset View"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                </button>
+                <button
+                  onClick={() => setDiagramModal(null)}
+                  style={{ background: "transparent", border: "none", color: "var(--text-muted, #8a8a8f)", width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.15s ease" }}
+                  className="hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                  title="Close (Esc)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Pan & Zoom Canvas */}
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                overflow: "hidden",
+                position: "absolute",
+                inset: 0,
+                cursor: "grab",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1,
+              }}
+              onMouseDown={(e) => {
+                isPanningRef.current = true;
+                startPanRef.current = { x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y };
+                e.currentTarget.style.cursor = "grabbing";
+              }}
+              onMouseMove={(e) => {
+                if (!isPanningRef.current) return;
+                panRef.current = {
+                  x: e.clientX - startPanRef.current.x,
+                  y: e.clientY - startPanRef.current.y,
+                };
+                updateSvgTransform(zoomRef.current, panRef.current);
+              }}
+              onMouseUp={(e) => {
+                isPanningRef.current = false;
+                e.currentTarget.style.cursor = "grab";
+              }}
+              onMouseLeave={(e) => {
+                isPanningRef.current = false;
+                e.currentTarget.style.cursor = "grab";
+              }}
+            >
+              <div
+                ref={lightboxCanvasRef}
+                style={{
+                  width: "95%",
+                  height: "95%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                dangerouslySetInnerHTML={{ __html: diagramModal.svgHtml }}
+              />
+            </div>
+
+            {/* Footer Instructions */}
+            <div 
+              style={{ 
+                position: "absolute",
+                bottom: "20px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "rgba(20, 20, 25, 0.65)",
+                backdropFilter: "blur(8px)",
+                padding: "6px 16px",
+                borderRadius: "20px",
+                fontSize: "11px", 
+                color: "var(--text-muted, #a1a1aa)", 
+                textAlign: "center",
+                zIndex: 10,
+                pointerEvents: "none",
+              }}
+            >
+              Scroll mouse wheel to zoom | Click and drag to pan | Press Escape to close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Link Preview Popup */}
+      {linkPreview && (
+        <div
+          className={linkPreviewClass}
+          style={{
+            position: "fixed",
+            left: linkPreview.position.x,
+            top: linkPreview.position.y,
+            zIndex: 10000,
+          }}
+          onMouseEnter={() => {
+            // Keep preview open while hovering
+            if (hoverTimeoutRef.current) {
+              clearTimeout(hoverTimeoutRef.current);
+            }
+          }}
+          onMouseLeave={() => setLinkPreview(null)}
+        >
+          <div className={linkPreviewHeaderClass}>
+            <span className={linkPreviewTitleClass}>{linkPreview.noteName}</span>
+          </div>
+          <div
+            className={linkPreviewContentClass}
+            dangerouslySetInnerHTML={{
+              __html: renderPreviewContent(linkPreview.content),
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
+}

@@ -1,0 +1,18 @@
+@import "../../../src/tailwind.css";
+/* These shared classes live outside the website's automatic source scan. */
+@source "../../../src/styles/documentTailwindClasses.ts";
+@source "../../../src/styles/themeClasses.ts";
+
+/* The desktop stylesheet locks the window. Keep the marketing page scrollable. */
+html,
+body,
+#root {
+  width: auto;
+  height: auto;
+  min-height: 100%;
+  overflow: unset;
+}
+
+body {
+  background: var(--bg);
+}

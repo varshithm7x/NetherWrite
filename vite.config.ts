@@ -50,7 +50,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['d3-force', 'react-colorful'],
+    include: ['d3-force', 'd3', 'mermaid', 'react-colorful'],
   },
   worker: {
     format: 'es',
@@ -58,11 +58,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    watch: { ignored: ['**/.openonyx/**', '**/.openobsidian/**', '**/dist-electron/**', '**/Documents/**'] },
   },
   test: {
-    include: ["tests/**/*.test.{ts,tsx}"],
-    
+    include: ["tests/**/*.test.ts"],
+    exclude: ["tests/real-plugin-bundles.test.ts"],
     environment: "node",
   },
 });

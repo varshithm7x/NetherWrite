@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to release, for example v1.0.0"
+        required: true
+        type: string
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - linux
+          - windows
+          - macos
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Publish ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux
+            os: ubuntu-latest
+            script: package:linux
+            release_paths: |
+              release/*.AppImage
+              release/*.deb
+              release/*.rpm
+              release/*.pacman
+              release/*.pkg.tar.*
+              release/*.blockmap
+              release/latest-linux.yml
+          - name: windows
+            os: windows-latest
+            script: package:win
+            release_paths: |
+              release/*.exe
+              release/*.blockmap
+              release/latest.yml
+          - name: macos
+            os: macos-latest
+            script: package:mac
+            release_paths: |
+              release/*.dmg
+              release/*-mac.zip
+              release/*.blockmap
+              release/latest-mac.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
+
+      - name: Setup Node
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux package tools
+        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name) }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcrypt1 rpm libarchive-tools
+
+      - name: Install dependencies
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        run: npm ci
+
+      - name: Check release icons
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        shell: bash
+        run: |
+          test -f build/icon.png
+          test -f build/icon.ico
+          test -f build/icon.icns
+
+      - name: Configure macOS code signing and notarization
+        if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name) }}
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "::warning::CSC_LINK is not set — macOS build will be UNSIGNED and blocked by Gatekeeper"
+          else
+            echo "macOS signing credentials configured"
+            echo "CSC_LINK=$CSC_LINK" >> $GITHUB_ENV
+            echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD" >> $GITHUB_ENV
+            if [ -n "$APPLE_ID" ]; then
+              echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD" >> $GITHUB_ENV
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Configure Windows code signing
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name) }}
+        shell: bash
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$WIN_CSC_LINK" ]; then
+            echo "::warning::WIN_CSC_LINK is not set — Windows build will not be signed"
+          else
+            echo "Windows signing credentials configured"
+            echo "WIN_CSC_LINK=$WIN_CSC_LINK" >> $GITHUB_ENV
+            echo "WIN_CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD" >> $GITHUB_ENV
+          fi
+
+      - name: Build installers
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        run: npm run ${{ matrix.platform.script }}
+
+      - name: Verify release artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        shell: bash
+        env:
+          RELEASE_PLATFORM: ${{ matrix.platform.name }}
+        run: |
+          set -euo pipefail
+          has_artifact() {
+            for file in release/$1; do
+              if [ -f "$file" ]; then
+                return 0
+              fi
+            done
+            echo "Missing release artifact matching release/$1" >&2
+            return 1
+          }
+
+          case "$RELEASE_PLATFORM" in
+            linux)
+              has_artifact '*.AppImage'
+              has_artifact '*.deb'
+              has_artifact '*.pkg.tar.*'
+              ;;
+            windows)
+              has_artifact '*.exe'
+              ;;
+            macos)
+              has_artifact '*.dmg'
+              has_artifact '*-mac.zip'
+              ;;
+            *)
+              echo "Unknown release platform: $RELEASE_PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "Verified $RELEASE_PLATFORM release artifacts:"
+          for file in release/*; do
+            if [ -f "$file" ]; then
+              printf '  %s\n' "$(basename "$file")"
+            fi
+          done | sort
+
+      - name: Prepare release notes
+        if: ${{ matrix.platform.name == 'linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^## / {
+              if (found) exit
+              found = 1
+            }
+            found { print }
+          ' changelog.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Publish release assets
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ matrix.platform.release_paths }}
+          fail_on_unmatched_files: false
+          body_path: ${{ matrix.platform.name == 'linux' && 'release-notes.md' || '' }}
+          generate_release_notes: false

@@ -1,0 +1,14 @@
+# Repository docs
+
+User-facing product docs live at [netherwrite.dev](https://netherwrite.dev) (placeholder URL) and in [`website/`](../website/). This folder is for contributors.
+
+| File | What it is |
+| --- | --- |
+| [roadmap.md](roadmap.md) | Public roadmap linked from the README |
+| [spaces.md](spaces.md) | Spaces pipeline, IndexedDB / Supabase schema, sync |
+| [obsidian-plugin-compatibility.md](obsidian-plugin-compatibility.md) | Plugin API coverage and real-bundle tests |
+| [mcp-architecture.md](mcp-architecture.md) | Proposed architecture for user-configurable MCP servers |
+
+Screenshots under `docs/images/` are copies of the site stills. Prefer [`website/public/images/`](../website/public/images/) when updating the product site. The README hero is `docs/images/banner.svg`.
+
+Internal notes at the repo root (`collaboration_audit_report.md`, `sync_and_collaboration_technical_spec.md`) are working papers, not the public guide.

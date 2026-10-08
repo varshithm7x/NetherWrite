@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+PackageIdentifier: NetherWrite.NetherWrite
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: NetherWrite
+PublisherUrl: https://github.com/NetherWrite
+PublisherSupportUrl: https://github.com/varshithm7x/NetherWrite/issues
+Author: NetherWrite
+PackageName: NetherWrite
+PackageUrl: https://github.com/varshithm7x/NetherWrite
+License: Apache-2.0
+LicenseUrl: https://github.com/varshithm7x/NetherWrite/blob/main/LICENSE
+ShortDescription: Local-first knowledge management app built around Markdown and graph navigation.
+Description: NetherWrite is a desktop knowledge management app built around plain Markdown files, Obsidian-style workflows, graph navigation, local semantic indexing, and optional cloud collaboration.
+Tags:
+  - markdown
+  - notes
+  - knowledge-management
+  - graph
+  - electron
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0

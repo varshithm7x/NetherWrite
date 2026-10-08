@@ -5,8 +5,6 @@ node_modules/
 dist/
 dist-electron/
 release/
-build/
-*.zip
 
 # Environment
 .env
@@ -30,7 +28,6 @@ PROMPT.md
 .gemini/
 .agents/
 .openobsidian/
-.openonyx/
 
 # Test & scratch files
 OO-Test-Vault/
@@ -45,3 +42,10 @@ venv/
 OOMobile/
 # Supabase CLI local state
 supabase/.temp/
+
+# Vault-local state and native credential files
+.netherwrite/
+google-drive-credentials.enc
+
+# Legacy vault data retained during migration
+.openonyx/

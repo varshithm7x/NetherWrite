@@ -45,16 +45,18 @@ export class FileSystemManager {
     }
     this.vaultPath = vaultPath;
 
-    // Auto-migrate legacy .openobsidian vault data folder to .openonyx if present
+    // Preserve vault caches, plugin configuration, and settings across app renames.
     try {
-      const oldDataDir = path.join(vaultPath, '.openobsidian');
-      const newDataDir = path.join(vaultPath, '.openonyx');
-      if (fs.existsSync(oldDataDir) && !fs.existsSync(newDataDir)) {
-        fs.renameSync(oldDataDir, newDataDir);
-        console.log('[FileSystemManager] Successfully migrated vault data directory from .openobsidian to .openonyx');
+      const newDataDir = path.join(vaultPath, '.netherwrite');
+      for (const legacyName of ['.openonyx', '.openobsidian']) {
+        const oldDataDir = path.join(vaultPath, legacyName);
+        if (fs.existsSync(oldDataDir) && !fs.existsSync(newDataDir)) {
+          fs.renameSync(oldDataDir, newDataDir);
+        }
       }
     } catch (err) {
-      console.warn('[FileSystemManager] Failed to migrate .openobsidian directory:', err);
+      console.warn('[FileSystemManager] Failed to migrate legacy vault data:', err);
+      return false;
     }
 
     return true;
@@ -448,21 +450,21 @@ export class FileSystemManager {
     return `attachments/${uniqueName}`;
   }
 
-  // ── .openonyx/ Data Directory Operations ──────
+  // ── .netherwrite/ Data Directory Operations ──────
 
-  /** Ensure .openonyx/ directory structure exists */
+  /** Ensure .netherwrite/ directory structure exists */
   private ensureDataDir(subDir?: string): string {
     if (!this.vaultPath) throw new Error('No vault path set');
     const dataDir = subDir
-      ? path.join(this.vaultPath, '.openonyx', subDir)
-      : path.join(this.vaultPath, '.openonyx');
+      ? path.join(this.vaultPath, '.netherwrite', subDir)
+      : path.join(this.vaultPath, '.netherwrite');
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
     return dataDir;
   }
 
-  /** Read a JSON file from .openonyx/ */
+  /** Read a JSON file from .netherwrite/ */
   async readDataFile(relativePath: string): Promise<string | null> {
     try {
       const dir = this.ensureDataDir();
@@ -475,7 +477,7 @@ export class FileSystemManager {
     }
   }
 
-  /** Write a JSON file to .openonyx/ */
+  /** Write a JSON file to .netherwrite/ */
   async writeDataFile(relativePath: string, content: string): Promise<void> {
     const dir = this.ensureDataDir();
     const filePath = path.join(dir, relativePath);
@@ -487,7 +489,7 @@ export class FileSystemManager {
     await fs.promises.writeFile(filePath, content, 'utf-8');
   }
 
-  /** Delete a file from .openonyx/ */
+  /** Delete a file from .netherwrite/ */
   async deleteDataFile(relativePath: string): Promise<void> {
     try {
       const dir = this.ensureDataDir();
@@ -499,7 +501,7 @@ export class FileSystemManager {
     } catch { /* silent */ }
   }
 
-  /** List files in a .openonyx/ subdirectory */
+  /** List files in a .netherwrite/ subdirectory */
   async listDataDir(subDir: string): Promise<string[]> {
     try {
       const dir = this.ensureDataDir(subDir);

@@ -1,0 +1,36 @@
+# Maintainer: NetherWrite <netherwrite@gmail.com>
+
+pkgname=netherwrite-bin
+pkgver=1.0.4
+pkgrel=1
+pkgdesc="Local-first knowledge management app built around Markdown, graph navigation, and optional cloud collaboration"
+arch=("x86_64")
+url="https://github.com/varshithm7x/NetherWrite"
+license=("Apache-2.0")
+depends=("fuse2" "gtk3" "nss" "libxss" "libxtst" "libsecret" "xdg-utils")
+provides=("netherwrite")
+conflicts=("netherwrite")
+options=("!strip")
+
+_appimage="NetherWrite-${pkgver}.AppImage"
+
+source_x86_64=(
+  "${_appimage}::${url}/releases/download/v${pkgver}/${_appimage}"
+  "netherwrite.png::${url}/raw/v${pkgver}/build/icon.png"
+  "netherwrite.desktop"
+)
+
+# Replace SKIP values with real hashes before publishing:
+# makepkg -g
+sha256sums_x86_64=("SKIP" "SKIP" "SKIP")
+
+package() {
+  install -Dm755 "${srcdir}/${_appimage}" "${pkgdir}/opt/netherwrite/netherwrite.AppImage"
+  install -Dm644 "${srcdir}/netherwrite.png" "${pkgdir}/usr/share/pixmaps/netherwrite.png"
+  install -Dm644 "${srcdir}/netherwrite.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/netherwrite.png"
+  install -Dm644 "${srcdir}/netherwrite.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/netherwrite.png"
+  install -Dm644 "${srcdir}/netherwrite.desktop" "${pkgdir}/usr/share/applications/netherwrite.desktop"
+
+  install -dm755 "${pkgdir}/usr/bin"
+  ln -s "/opt/netherwrite/netherwrite.AppImage" "${pkgdir}/usr/bin/netherwrite"
+}

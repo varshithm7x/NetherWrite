@@ -1,42 +1,857 @@
-import type { ElectronAPI } from '../../electron/preload';
-import type { FileEntry } from '../types';
-const initialFiles: Record<string, string> = {
-  'Welcome.md': '# A little space for big ideas\n\nWelcome to **NoteWeave** — your notes, documents, and a thinking partner, together in one workspace.\n\n## Make connections\n\nIdeas become more useful when you connect them. Link a note with [[Research/Connected thinking]] and explore the relationship in the graph.\n\n## Bring your research\n\nOpen a local folder containing Markdown notes, PDFs, and Word documents. NoteWeave extracts the text and makes it available to your AI chat.\n\n## Think with your notes\n\nAsk the assistant to find a connection, summarize your research, or explain a topic. Answers cite the files they came from.\n\n> Your files stay yours. Your next idea is closer than you think.\n\n#knowledge #getting-started',
-  'Research/Connected thinking.md': '# Connected thinking\n\nA knowledge graph connects individual notes into a larger network. Wiki links make the relationships explicit.\n\nSemantic embeddings uncover related ideas even when the notes use different words. [[Research/Semantic search]] explains how these vectors work.\n\nConnections help us notice patterns, find missing questions, and synthesize new ideas.\n\n[[Welcome]] #research',
-  'Research/Semantic search.md': '# Semantic search\n\nSemantic search represents text as numerical vectors called embeddings. Related meanings produce similar vectors.\n\nNoteWeave uses the all-MiniLM-L6-v2 model locally to discover related notes. Cosine similarity measures how closely two vectors align.\n\nRetrieval augmented generation combines search results with a language model. The answer is grounded in retrieved passages, with citations for verification.\n\n[[Research/Connected thinking]] #ai #research',
-  'Projects/Hackathon plan.md': '# Hackathon plan\n\n## The idea\n\nBuild a focused knowledge workspace that helps people think across notes and documents.\n\n## Demo flow\n\n- [ ] Open a research folder\n- [ ] Import a PDF or Word document\n- [ ] Ask a question and inspect its sources\n- [ ] Explore related suggestions\n- [ ] Show the D3 knowledge graph\n\n## Principles\n\nKeep the interface calm and focused. Use local embeddings for discovery. Preserve Markdown portability.\n\n[[Research/Semantic search]] #project',
+/**
+ * Electron API Mock
+ *
+ * Provides a browser-compatible mock of the Electron API for development
+ * and testing outside of Electron. Uses localStorage and in-memory storage
+ * to simulate vault operations.
+ */
+
+import type { ElectronAPI } from "../../electron/preload";
+
+// In-memory file system for browser mode
+const mockFiles: Record<string, string> = {};
+const mockMcpServers: Record<string, any> = {};
+let mockMcpActivity: any[] = [];
+let mockMcpHydrated = false;
+let mockVaultPath: string | null = "OO-Test-Vault";
+
+const SAMPLE_NOTES: Record<string, string> = {
+  "Welcome.md": `# Welcome to NetherWrite
+
+NetherWrite is your **local-first knowledge management tool**. Think of it as a second brain — all your notes, connected.
+
+## Getting Started
+
+1. Create notes using the sidebar or \`Ctrl+N\`
+2. Link notes using \`[[Note Name]]\` syntax — like this: [[Getting Started]]
+3. View your knowledge graph with \`Ctrl+G\`
+4. Search across all notes with \`Ctrl+F\`
+5. Use the command palette with \`Ctrl+P\`
+
+## Features
+
+- ✅ Markdown editing with live preview
+- ✅ [[Wiki Links]] for connecting ideas
+- ✅ Interactive graph visualization
+- ✅ Tags with #welcome #introduction
+
+Check out [[Getting Started]] to learn more, or explore [[Markdown Guide]] for formatting.
+`,
+  "Getting Started.md": `# Getting Started
+
+Welcome to your NetherWrite vault! Here's everything you need to know.
+
+### Core Features
+
+- 📝 **Markdown Editor** — Full GitHub Flavored Markdown support with Live Preview
+- 🔗 **Wikilinks & Backlinks** — Connect notes with \`[[Note Name]]\` syntax
+- 🕸️ **Interactive Graph View** — Visualize your knowledge graph
+- 🔍 **Full-Text & Fuzzy Search** — Instant search across all your notes
+- 🤖 **Semantic AI Intelligence** — Auto-suggestions, insights, and RAG Q&A (100% optional)
+
+The power of NetherWrite lies in connecting your ideas:
+
+\`\`\`
+[[Note Name]]
+\`\`\`
+
+This creates a bidirectional link. The linked note will show this note in its **Backlinks** panel.
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| \`Ctrl+N\` | New Note |
+| \`Ctrl+S\` | Save |
+| \`Ctrl+F\` | Search |
+| \`Ctrl+G\` | Graph View |
+| \`Ctrl+P\` | Command Palette |
+| \`Ctrl+B\` | Bold |
+| \`Ctrl+Shift+B\` | Toggle Sidebar |
+
+## Next Steps
+
+- Read the [[Markdown Guide]] for formatting
+- Explore [[Knowledge Management]] best practices
+- Check out [[Project Ideas]] for inspiration
+
+#getting-started #tutorial
+`,
+  "Markdown Guide.md": `# Markdown Guide
+
+NetherWrite supports full **GitHub Flavored Markdown**. Here's a quick reference.
+
+## Text Formatting
+
+- **Bold**: \`**text**\`
+- *Italic*: \`*text*\`
+- ~~Strikethrough~~: \`~~text~~\`
+- \`Code\`: \`\` \`code\` \`\`
+
+## Lists
+
+- [x] Completed task
+- [ ] Incomplete task
+
+## Code Blocks
+
+\`\`\`javascript
+function greet(name) {
+  return \`Hello, \${name}!\`;
+}
+\`\`\`
+
+## Blockquotes
+
+> "The only true wisdom is in knowing you know nothing."
+> — Socrates
+
+See also: [[Getting Started]], [[Knowledge Management]]
+
+#markdown #reference #guide
+`,
+  "Knowledge Management.md": `# Knowledge Management
+
+Effective knowledge management is about **capturing, connecting, and retrieving** information efficiently.
+
+## The Zettelkasten Method
+
+1. **Atomic notes**: Each note captures one idea
+2. **Connections**: Notes link to related concepts
+3. **Emergence**: Insights emerge from the network
+
+## Best Practices
+
+- **Write for your future self**: Be clear and specific
+- **One idea per note**: Keep notes focused
+- **Link liberally**: More connections = more insights
+
+## Related
+
+- [[Welcome]]
+- [[Markdown Guide]]
+- [[Project Ideas]]
+
+#knowledge-management #zettelkasten #productivity
+`,
+  "Project Ideas.md": `# Project Ideas
+
+A collection of project ideas for your [[Knowledge Management]] system.
+
+## Software Projects
+
+- [ ] Personal Dashboard
+- [ ] CLI Tools
+- [ ] Open Source Contributions
+
+## Learning Goals
+
+- [ ] Learn Rust
+- [ ] Explore Haskell
+- [ ] Machine learning basics
+
+Related: [[Knowledge Management]], [[Welcome]]
+
+#projects #ideas #planning
+`,
 };
-export function createMockAPI(): ElectronAPI {
-  const storageKey = 'noteweave-demo-files';
-  let files = { ...initialFiles };
-  try { files = { ...files, ...JSON.parse(localStorage.getItem(storageKey) || '{}') }; } catch {}
-  const persist = () => localStorage.setItem(storageKey, JSON.stringify(files));
-  const tree = (): FileEntry[] => {
-    const root: FileEntry[] = [];
-    for (const [path, content] of Object.entries(files)) {
-      let children = root; const parts = path.split('/');
-      parts.forEach((name, index) => {
-        const relative = parts.slice(0, index + 1).join('/'); const folder = index < parts.length - 1;
-        let entry = children.find(item => item.path === relative);
-        if (!entry) { entry = { name, path: relative, absolutePath: relative, isDirectory: folder, extension: folder ? '' : '.' + name.split('.').pop(), modifiedAt: 1, size: content.length, ...(folder ? { children: [] } : {}) }; children.push(entry); }
-        if (folder) children = entry.children!;
-      });
+
+/** Extract [[wiki-links]] from content */
+function extractLinks(content: string): string[] {
+  const regex = /\[\[([^\]]+)\]\]/g;
+  const links: string[] = [];
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    links.push(match[1].trim());
+  }
+  return [...new Set(links)];
+}
+
+/** Extract #tags from content */
+function extractTags(content: string): string[] {
+  const regex = /(?:^|\s)#([a-zA-Z][a-zA-Z0-9_-]*)/g;
+  const tags: string[] = [];
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    tags.push(match[1]);
+  }
+  return [...new Set(tags)];
+}
+
+function getBasename(path: string): string {
+  return path.split("/").pop() || path;
+}
+
+/** Build file tree from mock files */
+function buildFileTree(): any[] {
+  const tree: any[] = [];
+  const dirs: Record<string, any[]> = { "": tree };
+
+  // Sort paths to ensure directories come before their contents
+  const paths = Object.keys(mockFiles).sort();
+
+  for (const filePath of paths) {
+    const parts = filePath.split("/");
+    const fileName = parts.pop()!;
+    const dirPath = parts.join("/");
+
+    // Ensure directory entries exist
+    let currentPath = "";
+    for (const part of parts) {
+      const parentPath = currentPath;
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!dirs[currentPath]) {
+        const dirEntry = {
+          name: part,
+          path: currentPath,
+          absolutePath: `OO-Test-Vault/${currentPath}`,
+          isDirectory: true,
+          extension: "",
+          children: [] as any[],
+          modifiedAt: Date.now(),
+          size: 0,
+        };
+        dirs[currentPath] = dirEntry.children;
+        (dirs[parentPath] || tree).push(dirEntry);
+      }
     }
-    return root;
+
+    const fileEntry = {
+      name: fileName,
+      path: filePath,
+      absolutePath: `OO-Test-Vault/${filePath}`,
+      isDirectory: false,
+      extension: ".md",
+      modifiedAt: Date.now(),
+      size: mockFiles[filePath].length,
+    };
+    (dirs[dirPath] || tree).push(fileEntry);
+  }
+
+  return tree;
+}
+
+export function seedMockFiles(files: Record<string, string>): void {
+  for (const key of Object.keys(mockFiles)) delete mockFiles[key];
+  Object.assign(mockFiles, files);
+}
+
+export function createMockAPI(): ElectronAPI {
+  // Initialize with sample notes unless a vault was already seeded.
+  if (Object.keys(mockFiles).length === 0) {
+    Object.assign(mockFiles, SAMPLE_NOTES);
+  }
+  if (!mockMcpHydrated && typeof localStorage !== "undefined") {
+    try {
+      Object.assign(mockMcpServers, JSON.parse(localStorage.getItem("netherwrite-mcp-servers") || "{}"));
+      mockMcpActivity = JSON.parse(localStorage.getItem("netherwrite-mcp-activity") || "[]");
+    } catch { /* ignore corrupt browser-only mock data */ }
+    mockMcpHydrated = true;
+  }
+
+  const persistMockMcp = () => {
+    if (typeof localStorage !== "undefined") localStorage.setItem("netherwrite-mcp-servers", JSON.stringify(mockMcpServers));
   };
-  return {
-    openVaultDialog: async () => 'Demo workspace', setVaultPath: async () => true, getVaultPath: async () => 'Demo workspace', getFileTree: async () => tree(),
-    readFile: async path => files[path] ?? null, readBinary: async path => new TextEncoder().encode(files[path] || ''),
-    writeFile: async (path, content) => { files[path] = content; persist(); }, writeBinary: async () => { throw new Error('Document imports are available in the desktop app.'); },
-    createFile: async (path, content = '') => { if (path in files) throw new Error('A file with that name already exists.'); files[path] = content; persist(); }, createDirectory: async () => {}, fileExists: async path => path in files,
-    getGraphData: async () => {
-      const nodes = Object.keys(files).filter(path => path.endsWith('.md')).map(path => ({ id: path.slice(0, -3), name: path.split('/').pop()!.slice(0, -3), path, connections: 0 }));
-      const edges: { source: string; target: string }[] = [];
-      for (const node of nodes) for (const match of files[node.path].matchAll(/\[\[([^\]|#]+)(?:[^\]]*)\]\]/g)) { const target = nodes.find(item => item.id === match[1] || item.name === match[1]); if (target) { edges.push({ source: node.id, target: target.id }); node.connections++; target.connections++; } }
-      return { nodes, edges };
+  const persistMockMcpActivity = () => {
+    if (typeof localStorage !== "undefined") localStorage.setItem("netherwrite-mcp-activity", JSON.stringify(mockMcpActivity));
+  };
+
+  const mockAPI: ElectronAPI = {
+    // Vault
+    openVaultDialog: async () => {
+      mockVaultPath = "OO-Test-Vault";
+      return "OO-Test-Vault";
     },
-    dataRead: async path => localStorage.getItem('noteweave-data:' + path), dataWrite: async (path, content) => { localStorage.setItem('noteweave-data:' + path, content); }, dataDelete: async path => { localStorage.removeItem('noteweave-data:' + path); }, dataList: async path => Object.keys(localStorage).filter(key => key.startsWith('noteweave-data:' + path + '/')).map(key => key.split('/').pop()!),
-    openExternal: async url => { if (/^https?:\/\//.test(url)) window.open(url, '_blank', 'noopener,noreferrer'); },
-    openPath: async () => 'Open original files in the desktop app.', extractDoc: async () => { throw new Error('Word documents require the desktop app.'); }, importDocuments: async () => { throw new Error('Use the desktop app to import documents, or open a folder containing them.'); }, minimizeWindow: () => {}, maximizeWindow: () => {}, closeWindow: () => {},
+    setVaultPath: async (path: string) => {
+      mockVaultPath = path;
+      const stored = localStorage.getItem("mock-previously-opened-vaults");
+      const list = stored ? JSON.parse(stored) : [];
+      if (!list.includes(path)) {
+        list.push(path);
+        localStorage.setItem("mock-previously-opened-vaults", JSON.stringify(list));
+      }
+      return true;
+    },
+    getVaultPath: async () => mockVaultPath,
+    getPreviouslyOpenedVaults: async () => {
+      const stored = localStorage.getItem("mock-previously-opened-vaults");
+      if (stored) return JSON.parse(stored);
+      return mockVaultPath ? [mockVaultPath] : [];
+    },
+    removePreviouslyOpenedVault: async (vaultPath: string) => {
+      const stored = localStorage.getItem("mock-previously-opened-vaults");
+      const list = stored ? JSON.parse(stored) : [];
+      const next = list.filter((path: string) => path !== vaultPath);
+      localStorage.setItem("mock-previously-opened-vaults", JSON.stringify(next));
+      return next;
+    },
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showSaveDialog: async () => ({ canceled: true, filePath: "" }),
+    openPath: async () => "",
+    openExternal: async () => {},
+    showItemInFolder: async () => {},
+    renamePath: async (_oldPath: string, newPath: string) => {
+      mockVaultPath = newPath;
+      return { success: true as const };
+    },
+    getSystemPath: async (name: string) => name === "documents" ? "/documents" : "/",
+
+    // File operations
+    listFiles: async (dirPath?: string) => {
+      const tree = buildFileTree();
+      if (!dirPath) return tree;
+      // Find the subdirectory
+      const findDir = (entries: any[], path: string): any[] => {
+        for (const entry of entries) {
+          if (entry.path === path && entry.isDirectory)
+            return entry.children || [];
+          if (entry.children) {
+            const found = findDir(entry.children, path);
+            if (found.length) return found;
+          }
+        }
+        return [];
+      };
+      return findDir(tree, dirPath);
+    },
+
+    readFile: async (filePath: string) => {
+      return mockFiles[filePath] || "";
+    },
+
+    readBinary: async (filePath: string) => {
+      return new TextEncoder().encode(mockFiles[filePath] || "");
+    },
+
+    writeFile: async (filePath: string, content: string) => {
+      mockFiles[filePath] = content;
+    },
+
+    writeBinary: async (filePath: string, content: Uint8Array) => {
+      mockFiles[filePath] = new TextDecoder().decode(content);
+    },
+
+    createFile: async (filePath: string, content?: string) => {
+      if (!mockFiles[filePath]) {
+        mockFiles[filePath] = content || "";
+      }
+    },
+
+    deleteFile: async (filePath: string) => {
+      delete mockFiles[filePath];
+    },
+
+    trashFile: async (filePath: string) => {
+      mockFiles[`__system_trash__/${filePath}`] = mockFiles[filePath] || "";
+      delete mockFiles[filePath];
+    },
+
+    renameFile: async (oldPath: string, newPath: string) => {
+      if (mockFiles[oldPath] !== undefined) {
+        // Renaming a file
+        mockFiles[newPath] = mockFiles[oldPath];
+        delete mockFiles[oldPath];
+      } else {
+        // Potentially renaming a directory
+        const keys = Object.keys(mockFiles);
+        const prefix = oldPath.endsWith("/") ? oldPath : `${oldPath}/`;
+        const newPrefix = newPath.endsWith("/") ? newPath : `${newPath}/`;
+
+        for (const key of keys) {
+          if (key.startsWith(prefix)) {
+            const suffix = key.substring(prefix.length);
+            const newKey = newPrefix + suffix;
+            mockFiles[newKey] = mockFiles[key];
+            delete mockFiles[key];
+          }
+        }
+      }
+    },
+
+    createDirectory: async (_dirPath: string) => {
+      // Directories are implicit in our mock
+    },
+
+    deleteDirectory: async (dirPath: string) => {
+      for (const key of Object.keys(mockFiles)) {
+        if (key.startsWith(dirPath + "/")) {
+          delete mockFiles[key];
+        }
+      }
+    },
+
+    fileExists: async (filePath: string) => {
+      return filePath in mockFiles;
+    },
+
+    getFileTree: async () => buildFileTree(),
+    onVaultFileChanges: () => () => {},
+
+    // Search
+    search: async (query: string) => {
+      if (!query.trim()) return [];
+      const q = query.toLowerCase();
+      return Object.entries(mockFiles)
+        .filter(
+          ([path, content]) =>
+            path.toLowerCase().includes(q) || content.toLowerCase().includes(q),
+        )
+        .map(([path, content]) => ({
+          path,
+          name: path.replace(/\.md$/, ""),
+          matches: [
+            {
+              key: "content",
+              indices: [[0, 0]] as readonly [number, number][],
+              value: content.substring(0, 200),
+            },
+          ],
+          score: path.toLowerCase().includes(q) ? 0.1 : 0.5,
+        }))
+        .slice(0, 20);
+    },
+
+    rebuildIndex: async () => {},
+
+    // Graph
+    getGraphData: async () => {
+      const nodes: Map<string, any> = new Map();
+      const edges: any[] = [];
+      // Track children for each node (outgoing links - nodes this note links TO)
+      const childrenMap: Map<string, Set<string>> = new Map();
+
+      for (const [filePath, content] of Object.entries(mockFiles)) {
+        const name = getBasename(filePath).replace(/\.md$/, "");
+        const key = name.toLowerCase();
+        if (!nodes.has(key)) {
+          nodes.set(key, { id: key, name, path: filePath, connections: 0 });
+          childrenMap.set(key, new Set());
+        }
+
+        const links = extractLinks(content);
+        for (const linkTarget of links) {
+          const targetKey = linkTarget.toLowerCase();
+          if (!nodes.has(targetKey)) {
+            nodes.set(targetKey, {
+              id: targetKey,
+              name: linkTarget,
+              path: "",
+              connections: 0,
+            });
+            childrenMap.set(targetKey, new Set());
+          }
+          edges.push({ source: key, target: targetKey });
+          // Track children (outgoing links from source TO target)
+          childrenMap.get(key)?.add(targetKey);
+        }
+      }
+
+      // Calculate total descendants for each node recursively
+      const descendantCache: Map<string, number> = new Map();
+
+      const countDescendants = (
+        nodeId: string,
+        visited: Set<string>,
+      ): number => {
+        // Prevent infinite loops from cycles
+        if (visited.has(nodeId)) return 0;
+
+        // Return cached value if available
+        if (descendantCache.has(nodeId)) return descendantCache.get(nodeId)!;
+
+        visited.add(nodeId);
+        const children = childrenMap.get(nodeId) || new Set();
+
+        let total = children.size; // Direct children
+        for (const child of children) {
+          total += countDescendants(child, new Set(visited));
+        }
+
+        descendantCache.set(nodeId, total);
+        return total;
+      };
+
+      // Set connections to total descendants count
+      for (const [nodeId, node] of nodes) {
+        node.connections = countDescendants(nodeId, new Set());
+      }
+
+      return { nodes: Array.from(nodes.values()), edges };
+    },
+
+    getBacklinks: async (filePath: string) => {
+      const targetName = getBasename(filePath).replace(/\.md$/, "");
+      const backlinks: string[] = [];
+      for (const [path, content] of Object.entries(mockFiles)) {
+        if (path === filePath) continue;
+        const links = extractLinks(content);
+        if (links.some((l) => l.toLowerCase() === targetName.toLowerCase())) {
+          backlinks.push(path);
+        }
+      }
+      return backlinks;
+    },
+
+    // Window controls (no-op in browser)
+    minimizeWindow: () => {},
+    maximizeWindow: () => {},
+    closeWindow: () => {},
+    isMaximized: async () => false,
+    isFullScreen: async () => false,
+    onFullScreenChange: (_callback: (isFullScreen: boolean) => void) => () => {},
+
+    // Menu events (no-op in browser)
+    onMenuEvent: (_channel: string, _callback: (...args: any[]) => void) => {},
+    removeMenuListener: (_channel: string) => {},
+
+    // Daily note
+    createDailyNote: async () => {
+      const today = new Date().toISOString().split("T")[0];
+      const fileName = `Daily Notes/${today}.md`;
+      if (!mockFiles[fileName]) {
+        mockFiles[fileName] =
+          `# ${today}\n\n## Tasks\n\n- [ ] \n\n## Notes\n\n\n`;
+      }
+      return fileName;
+    },
+
+    // Tags
+    getAllTags: async () => {
+      const tagMap: Record<string, string[]> = {};
+      for (const [filePath, content] of Object.entries(mockFiles)) {
+        const tags = extractTags(content);
+        for (const tag of tags) {
+          if (!tagMap[tag]) tagMap[tag] = [];
+          tagMap[tag].push(filePath);
+        }
+      }
+      return tagMap;
+    },
+
+    // Attachments/Images
+    saveImage: async (fileName: string, _base64Data: string) => {
+      // In mock mode, just return a mock path
+      return `attachments/${fileName}`;
+    },
+
+    saveImageDedup: async (fileName: string, _base64Data: string) => {
+      return { relativePath: `attachments/${fileName}`, isDuplicate: false };
+    },
+
+    // .netherwrite Data Storage (localStorage fallback in browser mode)
+    dataRead: async (relativePath: string) => {
+      if (typeof localStorage === "undefined" || !localStorage) return null;
+      let content = localStorage.getItem(`netherwrite-data:${relativePath}`);
+      if (content === null) {
+        content = localStorage.getItem(`openobsidian-data:${relativePath}`);
+        if (content !== null) {
+          localStorage.setItem(`netherwrite-data:${relativePath}`, content);
+          localStorage.removeItem(`openobsidian-data:${relativePath}`);
+        }
+      }
+      return content;
+    },
+    dataWrite: async (relativePath: string, content: string) => {
+      if (typeof localStorage !== "undefined" && localStorage) {
+        localStorage.setItem(`netherwrite-data:${relativePath}`, content);
+      }
+    },
+    dataDelete: async (relativePath: string) => {
+      if (typeof localStorage !== "undefined" && localStorage) {
+        localStorage.removeItem(`netherwrite-data:${relativePath}`);
+      }
+    },
+    dataList: async (subDir: string) => {
+      if (typeof localStorage === "undefined" || !localStorage) return [];
+      const prefix = `netherwrite-data:${subDir}/`;
+      const files: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(prefix)) {
+          files.push(key.substring(prefix.length));
+        }
+      }
+      return files;
+    },
+
+    dataFetch: async (url: string): Promise<string> => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return res.text();
+    },
+
+    writeClipboardText: async (text: string): Promise<void> => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    },
+
+    readClipboardText: async (): Promise<string> => {
+      if (navigator.clipboard?.readText) {
+        return navigator.clipboard.readText();
+      }
+      return "";
+    },
+
+    exportMarkdownPdf: async (params: { html: string; defaultPath?: string }) => {
+      const preview = window.open("", "_blank");
+      if (preview) {
+        preview.document.open();
+        preview.document.write(params.html);
+        preview.document.close();
+        setTimeout(() => preview.print(), 100);
+      }
+      return { canceled: false, filePath: params.defaultPath || null };
+    },
+
+    networkRequest: async (params: any): Promise<any> => {
+      const res = await fetch(params.url, {
+        method: params.method || 'GET',
+        headers: params.headers,
+        body: params.body
+      });
+
+      const responseHeaders: Record<string, string> = {};
+      res.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+
+      let data;
+      if (params.responseType === 'json') {
+        data = await res.json();
+      } else {
+        data = await res.text();
+      }
+
+      return {
+        status: res.status,
+        headers: responseHeaders,
+        data
+      };
+    },
+
+    googleDrive: {
+      cachedPdf: async (): Promise<Uint8Array | null> => null,
+      previewPdf: async (): Promise<Uint8Array> => { throw new Error('Google Drive is unavailable outside the desktop app.'); },
+      cachedPreviewFile: async () => null,
+      previewFile: async () => { throw new Error('Google Drive is unavailable outside the desktop app.'); },
+      status: async () => ({ configured: false, secureStorage: false, accounts: [] }),
+      onStatusChanged: () => () => {},
+      connect: async () => { throw new Error("Google Drive requires the native app and configured OAuth."); },
+      cancelConnect: async () => {},
+      disconnect: async () => { throw new Error("Google Drive is not connected."); },
+      search: async () => { throw new Error("Google Drive is not connected."); },
+      getResource: async () => { throw new Error("Google Drive is not connected."); },
+    },
+    mcp: {
+      list: async () => Object.values(mockMcpServers),
+      listEnabledTools: async () => Object.values(mockMcpServers).flatMap((server: any) => (
+        (server.tools || [])
+          .filter((tool: any) => server.config.enabledTools.includes(tool.name))
+          .map((tool: any) => ({
+            serverId: server.config.id,
+            serverName: server.config.name,
+            serverStatus: server.runtime.status,
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            enabled: true,
+            favorite: server.config.favoriteTools?.includes(tool.name) ?? false,
+            requiresConfirmation: true as const,
+          }))
+      )),
+      listActivity: async () => mockMcpActivity,
+      clearActivity: async () => {
+        mockMcpActivity = [];
+        persistMockMcpActivity();
+      },
+      save: async (config) => {
+        const existing = mockMcpServers[config.id];
+        const snapshot = {
+          config: { ...config, favoriteTools: config.favoriteTools || [] },
+          runtime: existing?.runtime || { status: config.enabled ? "disconnected" : "disabled", diagnostics: [] },
+          tools: existing?.tools || [],
+        };
+        mockMcpServers[config.id] = snapshot;
+        persistMockMcp();
+        return snapshot;
+      },
+      remove: async (id) => { delete mockMcpServers[id]; persistMockMcp(); },
+      setEnabled: async (id, enabled) => {
+        const existing = mockMcpServers[id];
+        if (!existing) throw new Error(`Unknown MCP server: ${id}`);
+        existing.config = { ...existing.config, enabled, trusted: existing.config.trusted || enabled };
+        existing.runtime = { ...existing.runtime, status: enabled ? "disconnected" : "disabled" };
+        persistMockMcp();
+        return existing;
+      },
+      connect: async (id) => {
+        const existing = mockMcpServers[id];
+        if (!existing) throw new Error(`Unknown MCP server: ${id}`);
+        existing.runtime = { ...existing.runtime, status: "connected" };
+        if (!existing.tools.length) {
+          existing.tools = [{
+            name: "echo",
+            description: "Returns the supplied message for local MCP testing.",
+            inputSchema: {
+              type: "object",
+              properties: { message: { type: "string" } },
+              required: ["message"],
+            },
+          }];
+        }
+        return existing;
+      },
+      disconnect: async () => {},
+      reconnect: async (id: string) => mockAPI.mcp.connect(id),
+      revokeTrust: async (id: string) => {
+        const existing = mockMcpServers[id];
+        if (!existing) throw new Error(`Unknown MCP server: ${id}`);
+        existing.config = { ...existing.config, enabled: false, trusted: false };
+        existing.runtime = { ...existing.runtime, status: "disabled" };
+        persistMockMcp();
+        return existing;
+      },
+      requestToolExecution: async (id: string, name: string, args: Record<string, unknown>) => {
+        const existing = mockMcpServers[id];
+        if (!existing?.config.enabledTools.includes(name)) throw new Error(`MCP tool is not enabled: ${name}`);
+        const result = {
+          content: [{ type: "text", text: name === "echo" ? `Echo: ${String(args.message ?? "")}` : JSON.stringify(args) }],
+        };
+        mockMcpActivity = [{
+          id: `${Date.now()}-${id}-${name}`,
+          timestamp: Date.now(),
+          serverId: id,
+          serverName: existing.config.name,
+          toolName: name,
+          toolTitle: name.replace(/[_-]+/g, " ").replace(/^./, (first) => first.toUpperCase()),
+          status: "allowed",
+          inputSummary: Object.entries(args).map(([key, value]) => `${key}: ${String(value)}`).join("\n").slice(0, 300),
+          summary: result.content[0].text,
+        }, ...mockMcpActivity].slice(0, 100);
+        persistMockMcpActivity();
+        return result;
+      },
+      runTool: async (id: string, name: string, args: Record<string, unknown>) =>
+        mockAPI.mcp.requestToolExecution(id, name, args),
+    },
+
+    // Thought Model (mock implementation for browser)
+    thoughtModel: {
+      build: async (_vaultPath: string, _numClusters?: number) => {
+        // Simulate a build that completes quickly
+        return { job_id: "mock-job-123", status: "indexing" };
+      },
+      status: async (_jobId: string) => {
+        // Always return done for mock
+        return {
+          job_id: "mock-job-123",
+          status: "done",
+          progress: 100,
+          message: "Complete (mock)",
+          total_notes: 5,
+          total_chunks: 12,
+        };
+      },
+      themes: async (_jobId: string) => {
+        // Return mock themes based on sample notes
+        return {
+          themes: [
+            {
+              cluster_id: 0,
+              keywords: [
+                "knowledge",
+                "management",
+                "zettelkasten",
+                "notes",
+                "ideas",
+              ],
+              representative_chunks: [
+                {
+                  chunk_id: "km_0",
+                  note_id: "km",
+                  note_path: "Knowledge Management.md",
+                  note_title: "Knowledge Management",
+                  chunk_text:
+                    "Effective knowledge management is about capturing, connecting, and retrieving information efficiently.",
+                },
+              ],
+              note_count: 2,
+            },
+            {
+              cluster_id: 1,
+              keywords: ["markdown", "formatting", "code", "text", "guide"],
+              representative_chunks: [
+                {
+                  chunk_id: "md_0",
+                  note_id: "md",
+                  note_path: "Markdown Guide.md",
+                  note_title: "Markdown Guide",
+                  chunk_text:
+                    "NetherWrite supports full GitHub Flavored Markdown. Here's a quick reference.",
+                },
+              ],
+              note_count: 1,
+            },
+            {
+              cluster_id: 2,
+              keywords: [
+                "getting",
+                "started",
+                "tutorial",
+                "shortcuts",
+                "linking",
+              ],
+              representative_chunks: [
+                {
+                  chunk_id: "gs_0",
+                  note_id: "gs",
+                  note_path: "Getting Started.md",
+                  note_title: "Getting Started",
+                  chunk_text:
+                    "Welcome to your NetherWrite vault! Here's everything you need to know.",
+                },
+              ],
+              note_count: 2,
+            },
+          ],
+          total_notes: 5,
+          total_chunks: 12,
+        };
+      },
+      query: async (_jobId: string, query: string, _topK?: number) => {
+        // Simple mock search
+        const results = [];
+        const q = query.toLowerCase();
+        for (const [path, content] of Object.entries(mockFiles)) {
+          if (content.toLowerCase().includes(q)) {
+            results.push({
+              score: 0.75,
+              note_title: path.replace(".md", ""),
+              note_path: path,
+              chunk_text: content.substring(0, 200),
+              cluster_id: 0,
+            });
+          }
+        }
+        return { query, results: results.slice(0, 10) };
+      },
+      clear: async (_jobId: string) => {
+        return { status: "cleared", job_id: "mock-job-123" };
+      },
+      health: async () => true,
+    },
   };
+
+  return mockAPI;
 }

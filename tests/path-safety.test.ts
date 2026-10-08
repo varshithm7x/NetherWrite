@@ -8,7 +8,7 @@ import {
 } from "../electron/pathSafety";
 
 describe("path safety", () => {
-  const root = path.resolve("/tmp/openonyx-vault");
+  const root = path.resolve("/tmp/netherwrite-vault");
 
   it("accepts the vault root and files inside it", () => {
     expect(isInsideRoot(root, root)).toBe(true);

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logos/logo-dark.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="NetherWrite is an open-source, local-first knowledge workspace. Write in Markdown, ask your own notes, and see how your ideas connect."
+    />
+    <meta name="theme-color" content="#0f0f14" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="NetherWrite" />
+    <meta property="og:title" content="NetherWrite — Your knowledge, entirely yours" />
+    <meta
+      property="og:description"
+      content="An open-source, local-first knowledge workspace with grounded AI, knowledge graphs, and plain Markdown files."
+    />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/varshithm7x/NetherWrite/main/website/public/images/banner.png"
+    />
+    <link rel="canonical" href="/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="NetherWrite — Your knowledge, entirely yours" />
+    <meta
+      name="twitter:description"
+      content="An open-source, local-first knowledge workspace with grounded AI, knowledge graphs, and plain Markdown files."
+    />
+    <meta
+      name="twitter:image"
+      content="https://raw.githubusercontent.com/varshithm7x/NetherWrite/main/website/public/images/banner.png"
+    />
+    <meta name="robots" content="index, follow" />
+    <meta name="keywords" content="local-first notes, open source knowledge management, Markdown notes, knowledge graph, grounded AI" />
+    <title>NetherWrite — Your knowledge, entirely yours</title>
+    <script>
+      try {
+        var t = localStorage.getItem("netherwrite-theme");
+        if (t !== "light" && t !== "dark") {
+          t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.dataset.theme = t;
+        document.documentElement.style.colorScheme = t;
+        var origin = location.origin;
+        var img = origin + "/images/banner.png";
+        var url = origin + location.pathname + location.search;
+        var ogImage = document.querySelector('meta[property="og:image"]');
+        var twImage = document.querySelector('meta[name="twitter:image"]');
+        var ogUrl = document.querySelector('meta[property="og:url"]');
+        var canon = document.querySelector('link[rel="canonical"]');
+        if (ogImage) ogImage.setAttribute("content", img);
+        if (twImage) twImage.setAttribute("content", img);
+        if (!ogUrl) {
+          ogUrl = document.createElement("meta");
+          ogUrl.setAttribute("property", "og:url");
+          document.head.appendChild(ogUrl);
+        }
+        ogUrl.setAttribute("content", url);
+        if (canon) canon.setAttribute("href", url);
+      } catch (e) {}
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

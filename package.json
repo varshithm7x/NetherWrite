@@ -1,20 +1,38 @@
 {
-  "name": "noteweave",
-  "version": "0.1.0",
-  "description": "An AI-assisted, local-first knowledge workspace for connected Markdown notes",
+  "name": "netherwrite",
+  "version": "1.0.5",
+  "description": "A local-first knowledge management tool with graph-based note linking",
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && node scripts/start-electron.cjs\"",
-    "dev:web": "vite",
-    "build:electron": "tsc -p tsconfig.electron.json && node scripts/build-preload.cjs",
-    "build": "tsc --noEmit && vite build && npm run build:electron",
-    "lint": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "test": "vitest run",
-    "start": "node scripts/start-electron.cjs --production",
-    "package:linux": "npm run build && electron-builder --linux dir AppImage --x64 --publish never"
+    "dev": "tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs && concurrently \"vite\" \"wait-on http://localhost:5173 && node scripts/dev/start-electron.cjs\"",
+    "build": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs",
+    "package": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --publish never",
+    "package:linux": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --linux dir AppImage --x64 --publish never && node scripts/linux/package-linux.cjs",
+    "package:pacman": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --linux dir --x64 --publish never && node scripts/linux/package-linux.cjs",
+    "package:win": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --win nsis portable --x64 --publish never",
+    "package:mac": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --mac dmg zip --x64 --arm64 --publish never",
+    "package:all": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/build-app-auth.cjs --require-google && electron-builder --linux AppImage deb rpm pacman --win nsis portable --mac dmg zip --publish never",
+    "lint": "tsc --noEmit",
+    "test": "vitest run --exclude tests/real-plugin-bundles.test.ts",
+    "test:watch": "vitest",
+    "test:vault-intelligence": "vitest run tests/e2e/vault-intelligence-real-vault.test.ts",
+    "test:canvas-compat": "node scripts/test-canvas-compat.cjs",
+    "test:obsidian-api": "node scripts/test-obsidian-api-compat.cjs",
+    "test:plugin-runtime": "vitest run tests/plugin-runtime.test.ts",
+    "test:excalidraw-live": "node scripts/test-excalidraw-live.cjs",
+    "test:kanban-live": "node scripts/test-kanban-live.cjs",
+    "test:notebook-navigator-live": "node scripts/test-notebook-navigator-live.cjs",
+    "fetch:plugin-fixtures": "node scripts/fetch-plugin-fixtures.cjs",
+    "install:pandoc-backend": "node scripts/install-pandoc-backend.cjs",
+    "test:pandoc-backend": "node scripts/test-pandoc-backend.cjs",
+    "test:plugin-bundles": "node scripts/fetch-plugin-fixtures.cjs && vitest run tests/real-plugin-bundles.test.ts",
+    "test:plugin-compat": "node scripts/test-obsidian-api-compat.cjs && vitest run tests/plugin-runtime.test.ts && node scripts/test-pandoc-backend.cjs && node scripts/fetch-plugin-fixtures.cjs && vitest run tests/real-plugin-bundles.test.ts",
+    "test:all-checks": "node scripts/run-all-checks.cjs",
+    "mcp:github": "node scripts/mcp-github-server.mjs"
   },
   "keywords": [
     "notes",
@@ -23,40 +41,100 @@
     "graph"
   ],
   "author": {
-    "name": "NoteWeave"
+    "name": "NetherWrite",
+    "email": "netherwrite@gmail.com"
+  },
+  "homepage": "https://github.com/varshithm7x/NetherWrite",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/varshithm7x/NetherWrite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/varshithm7x/NetherWrite/issues"
   },
   "license": "Apache-2.0",
   "dependencies": {
+    "@aiden0z/pptx-renderer": "^1.3.0",
+    "@codemirror/autocomplete": "^6.18.6",
     "@codemirror/commands": "^6.8.1",
     "@codemirror/lang-markdown": "^6.3.2",
     "@codemirror/language": "^6.11.0",
+    "@codemirror/search": "^6.5.10",
     "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.36.8",
+    "@fontsource/atkinson-hyperlegible": "^5.3.0",
     "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/lora": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@lezer/highlight": "^1.2.1",
+    "@lezer/lr": "^1.4.8",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@replit/codemirror-vim": "^6.3.0",
+    "@supabase/supabase-js": "^2.104.1",
     "@xenova/transformers": "^2.17.2",
+    "buffer": "^6.0.3",
+    "codemirror": "^5.65.20",
     "d3": "^7.9.0",
     "docx-preview": "^0.4.1",
     "dompurify": "^3.2.7",
+    "events": "^3.3.0",
+    "file-saver": "^2.0.5",
+    "fuse.js": "^7.1.0",
+    "idb": "^8.0.3",
+    "jszip": "^3.10.1",
+    "katex": "^0.16.44",
+    "kill-port": "^2.0.1",
+    "lib0": "^0.2.117",
+    "lucide": "^1.14.0",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.13.0",
     "marked": "^15.0.8",
+    "marked-katex-extension": "^5.1.7",
+    "mermaid": "^11.17.0",
+    "moment": "^2.30.1",
+    "path-browserify": "^1.0.1",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.1.0",
     "react-colorful": "^5.6.1",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "string_decoder": "^1.3.0",
+    "util": "^0.12.5",
+    "uuid": "^14.0.0",
+    "xlsx": "^0.18.5",
+    "y-codemirror.next": "^0.3.5",
+    "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.32"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.5",
+    "@protobufjs/utf8": "1.1.1",
+    "@codemirror/state": "$@codemirror/state",
+    "sharp": "^0.35.0",
+    "electron-builder": "^26.15.3",
+    "app-builder-lib": "^26.15.3",
+    "dmg-builder": "^26.15.3",
+    "builder-util-runtime": "^9.7.0",
+    "js-yaml": "^5.2.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",
     "@types/d3": "^7.4.3",
     "@types/dompurify": "^3.2.0",
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.1",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.4.1",
     "concurrently": "^9.1.2",
     "electron": "^41.10.7",
     "electron-builder": "^26.15.3",
+    "fake-indexeddb": "^6.2.4",
     "jsdom": "^26.1.0",
+    "obsidian": "^1.13.1",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.8.2",
     "vite": "^6.3.1",
@@ -64,9 +142,9 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "appId": "com.noteweave.app",
-    "productName": "NoteWeave",
-    "copyright": "Copyright © 2026 NoteWeave contributors",
+    "appId": "com.netherwrite.app",
+    "productName": "NetherWrite",
+    "copyright": "Copyright © 2026 NetherWrite",
     "directories": {
       "output": "release"
     },
@@ -74,6 +152,8 @@
       "dist/**/*",
       "dist-electron/**/*",
       "build/icon.png",
+      "build/icon.ico",
+      "build/icon.icns",
       "package.json"
     ],
     "win": {
@@ -95,7 +175,7 @@
       "runAfterFinish": true
     },
     "linux": {
-      "executableName": "noteweave",
+      "executableName": "netherwrite",
       "target": [
         "AppImage",
         "deb",
@@ -104,6 +184,25 @@
       ],
       "category": "Office",
       "icon": "build/icon.png"
+    },
+    "deb": {
+      "priority": "optional",
+      "afterInstall": "scripts/linux/after-install.sh",
+      "fpm": [
+        "--no-auto-depends"
+      ],
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2 | libasound2t64"
+      ]
     },
     "rpm": {
       "fpm": [
@@ -161,18 +260,21 @@
     },
     "dmg": {
       "backgroundColor": "#121212"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "scripts/mcp-github-server.mjs",
+        "to": "mcp/mcp-github-server.mjs"
+      },
+      {
+        "from": "scripts/mcp-dev-filesystem-server.mjs",
+        "to": "mcp/mcp-dev-filesystem-server.mjs"
+      },
+      {
+        "from": "scripts/mcp-dev-echo-server.mjs",
+        "to": "mcp/mcp-dev-echo-server.mjs"
+      }
+    ]
   },
-  "type": "module",
-  "overrides": {
-    "protobufjs": "^7.6.5",
-    "@protobufjs/utf8": "1.1.1",
-    "@codemirror/state": "$@codemirror/state",
-    "sharp": "^0.35.0",
-    "electron-builder": "^26.15.3",
-    "app-builder-lib": "^26.15.3",
-    "dmg-builder": "^26.15.3",
-    "builder-util-runtime": "^9.7.0",
-    "js-yaml": "^5.2.1"
-  }
+  "type": "module"
 }

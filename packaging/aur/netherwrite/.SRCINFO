@@ -1,0 +1,23 @@
+pkgbase = netherwrite
+	pkgdesc = Local-first knowledge management app built around Markdown, graph navigation, and optional cloud collaboration
+	pkgver = 1.0.3
+	pkgrel = 1
+	url = https://github.com/varshithm7x/NetherWrite
+	arch = x86_64
+	license = Apache-2.0
+	depends = fuse2
+	depends = gtk3
+	depends = nss
+	depends = libxss
+	depends = libxtst
+	depends = libsecret
+	depends = xdg-utils
+	options = !strip
+	source_x86_64 = NetherWrite-1.0.3.AppImage::https://github.com/varshithm7x/NetherWrite/releases/download/v1.0.3/NetherWrite-1.0.3.AppImage
+	source_x86_64 = netherwrite.png::https://github.com/varshithm7x/NetherWrite/raw/v1.0.3/build/icon.png
+	source_x86_64 = netherwrite.desktop
+	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = SKIP
+
+pkgname = netherwrite

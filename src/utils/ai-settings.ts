@@ -1,7 +1,7 @@
 /**
  * AI Settings - Configuration for AI providers and models
  * 
- * Uses disk storage (.openonyx/ai-settings.json) for security.
+ * Uses disk storage (.netherwrite/ai-settings.json) for security.
  * Plaintext API keys are never left in localStorage.
  */
 
@@ -145,7 +145,7 @@ export function getModelsForProvider(provider: AIProvider): AIModel[] {
   return OPENROUTER_MODELS;
 }
 
-export const DEFAULT_MODEL_ID = "mistralai/mistral-small-3.2-24b-instruct";
+export const DEFAULT_MODEL_ID = "openai/gpt-4o";
 export const DEFAULT_PROVIDER: AIProvider = "openrouter";
 
 export interface AISettings {
@@ -158,7 +158,7 @@ export interface AISettings {
   customModelId?: string;
 }
 
-const LEGACY_STORAGE_KEY = "openonyx-ai-settings";
+const LEGACY_STORAGE_KEY = "netherwrite-ai-settings";
 const DISK_SETTINGS_PATH = "ai-settings.json";
 export const AI_SETTINGS_CHANGED_EVENT = "ai-settings-changed";
 
@@ -197,7 +197,7 @@ export function loadSettings(): AISettings {
           try {
             if (typeof localStorage !== "undefined") {
               localStorage.removeItem(LEGACY_STORAGE_KEY);
-              console.log("[AISettings] Migrated AI settings from localStorage to .openonyx/ai-settings.json");
+              console.log("[AISettings] Migrated AI settings from localStorage to .netherwrite/ai-settings.json");
             }
           } catch { /* silent */ }
         });
@@ -217,7 +217,7 @@ export async function loadSettingsAsync(): Promise<AISettings> {
   if (_loadPromise) return _loadPromise;
 
   _loadPromise = (async (): Promise<AISettings> => {
-    // 1. Read from disk (.openonyx/ai-settings.json)
+    // 1. Read from disk (.netherwrite/ai-settings.json)
     const diskData = await readData<AISettings>(DISK_SETTINGS_PATH);
     if (diskData) {
       const result: AISettings = { ...DEFAULT_SETTINGS, ...diskData };
@@ -241,7 +241,7 @@ export async function loadSettingsAsync(): Promise<AISettings> {
           _settingsCache = result;
           await writeData(DISK_SETTINGS_PATH, result);
           localStorage.removeItem(LEGACY_STORAGE_KEY);
-          console.log("[AISettings] Migrated AI settings from localStorage to .openonyx/ai-settings.json");
+          console.log("[AISettings] Migrated AI settings from localStorage to .netherwrite/ai-settings.json");
           notifySettingsChanged();
           return result;
         }
@@ -306,8 +306,8 @@ export function getProviderHeaders(config: AIConfig): Record<string, string> {
     Authorization: `Bearer ${config.apiKey}`,
   };
   if (config.provider === "openrouter") {
-    base["HTTP-Referer"] = typeof window !== 'undefined' ? window.location.origin : "https://openonyx.app";
-    base["X-Title"] = "OpenOnyx";
+    base["HTTP-Referer"] = typeof window !== 'undefined' ? window.location.origin : "https://netherwrite.app";
+    base["X-Title"] = "NetherWrite";
   }
   return base;
 }
