@@ -474,7 +474,7 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle('data:write', async (_event, relativePath: string, content: string, options?: { atomic: true; expectedVaultPath: string }) => {
-    if (options && (!['comments.json', 'forge-flashcards.json'].includes(relativePath) || options.atomic !== true || typeof options.expectedVaultPath !== 'string')) {
+    if (options && (!['comments.json', 'forge-flashcards.json', 'forge-reports.json'].includes(relativePath) || options.atomic !== true || typeof options.expectedVaultPath !== 'string')) {
       throw new Error('Invalid quiz comment write options');
     }
     await fsManager.writeDataFile(relativePath, content, options);

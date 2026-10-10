@@ -20,6 +20,7 @@ import './lib/obsidian-api/dom-extensions';
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { setCommentsVaultPath } from "./utils/commentsStore";
+import { renameReportSources } from "./utils/reportsStore";
 import { renameFlashcardSources } from "./utils/flashcardsStore";
 import { Editor } from "./components/editor/Editor";
 import { EditorHeader } from "./components/editor/EditorHeader";
@@ -4015,6 +4016,9 @@ export default function App() {
       if (!oldPath || !newPath || oldPath === newPath) return;
       if (vaultPath) void renameFlashcardSources(vaultPath, oldPath, newPath, Boolean(isDirectory)).catch(() => {
         console.warn("[Forge] Could not update flashcard source references after rename.");
+      });
+      if (vaultPath) void renameReportSources(vaultPath, oldPath, newPath, Boolean(isDirectory)).catch(() => {
+        console.warn("[Forge] Could not update report source references after rename.");
       });
       updateEmbeddingsAfterRename(oldPath, newPath, Boolean(isDirectory));
       updateOpenPathsAfterRename(oldPath, newPath, Boolean(isDirectory));

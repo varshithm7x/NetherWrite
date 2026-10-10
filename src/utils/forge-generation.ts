@@ -34,7 +34,7 @@ export function prepareForgeSource(source: string, count: number, modelId: strin
 }
 
 
-export function describeForgeProviderFailure(error: unknown, provider: "openai" | "openrouter", tool: "quiz" | "flashcards"): string {
+export function describeForgeProviderFailure(error: unknown, provider: "openai" | "openrouter", tool: "quiz" | "flashcards" | "report"): string {
   if (error instanceof AIProviderRequestError) {
     if (error.kind === "quota") return provider === "openai"
       ? "OpenAI API credits, quota, or billing limit reached. Check your API billing and project limits. ChatGPT Plus does not include API-key usage."

@@ -57,6 +57,16 @@ describe("filesystem jail", () => {
     expect(await manager.readDataFile("comments.json")).toBe('{"Source.md":[]}');
   });
 
+  it("persists learning reports atomically without touching quiz results or source notes", async () => {
+    const { vault, manager } = makeVault();
+    await manager.writeFile("Source.md", "Source remains unchanged");
+    await manager.writeDataFile("comments.json", '{"Source.md":[{"fixture":"saved quiz selections"}]}');
+    await manager.writeDataFile("forge-reports.json", '{"version":1,"reports":[]}', { atomic: true, expectedVaultPath: vault });
+    expect(await manager.readDataFile("forge-reports.json")).toBe('{"version":1,"reports":[]}');
+    expect(await manager.readFile("Source.md")).toBe("Source remains unchanged");
+    expect(await manager.readDataFile("comments.json")).toBe('{"Source.md":[{"fixture":"saved quiz selections"}]}');
+  });
+
   it("preserves existing comments after a failed atomic quiz write", async () => {
     const { vault, manager } = makeVault();
     await manager.writeDataFile("comments.json", '{"old":[]}');

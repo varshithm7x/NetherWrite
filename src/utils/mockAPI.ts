@@ -257,6 +257,14 @@ export function createMockAPI(): ElectronAPI {
   };
 
   const mockAPI: ElectronAPI = {
+    youtube: {
+      status: async () => ({ configured: false, secureStorage: false }),
+      saveKey: async () => { throw new Error("Secure YouTube credentials require the desktop app."); },
+      useSessionKey: async () => { throw new Error("Session YouTube credentials require the desktop app."); },
+      disconnect: async () => ({ configured: false, secureStorage: false }),
+      search: async () => { throw new Error("YouTube discovery requires the desktop app."); },
+      cancel: async () => {},
+    },
     // Vault
     openVaultDialog: async () => {
       mockVaultPath = "OO-Test-Vault";

@@ -194,6 +194,15 @@ const electronAPI = {
   networkRequest: (params: any): Promise<any> =>
     ipcRenderer.invoke('network:request', params),
 
+  // A personal key can be saved but never retrieved through this narrow surface.
+  youtube: {
+    status: (): Promise<import('./youtubeDiscovery.js').YouTubeStatus> => ipcRenderer.invoke('youtube:status'),
+    saveKey: (key: string): Promise<import('./youtubeDiscovery.js').YouTubeStatus> => ipcRenderer.invoke('youtube:saveKey', key),
+    useSessionKey: (key: string): Promise<import('./youtubeDiscovery.js').YouTubeStatus> => ipcRenderer.invoke('youtube:useSessionKey', key),
+    disconnect: (): Promise<import('./youtubeDiscovery.js').YouTubeStatus> => ipcRenderer.invoke('youtube:disconnect'),
+    search: (query: string, requestId: string, consent: true): Promise<import('./youtubeDiscovery.js').YouTubeSearchResult> => ipcRenderer.invoke('youtube:search', query, requestId, consent),
+    cancel: (requestId: string): Promise<void> => ipcRenderer.invoke('youtube:cancel', requestId),
+  },
   // Native provider surface: no credentials or unrestricted HTTP client.
   googleDrive: {
     cachedPdf: (accountId: string, fileId: string): Promise<Uint8Array | null> => ipcRenderer.invoke('drive:cachedPdf', accountId, fileId),

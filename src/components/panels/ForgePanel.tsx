@@ -7,6 +7,11 @@ import { FlashcardStudy } from "./FlashcardStudy";
 import { ForgeCreations } from "./ForgeCreations";
 import { deleteFlashcardDeck, FLASHCARDS_CHANGED_EVENT, loadFlashcardDecks } from "../../utils/flashcardsStore";
 import type { FlashcardDeck } from "../../types/flashcards";
+import { ForgeReportForm } from "./ForgeReportForm";
+import { LearningReportView } from "./LearningReportView";
+import { deleteLearningReport, loadLearningReports, REPORTS_CHANGED_EVENT } from "../../utils/reportsStore";
+import type { LearningReport } from "../../types/learning-reports";
+import type { ForgeSourceNote } from "../../utils/forge-note-source";
 
 import { ForgeMindMap, forgeButtonClass } from "./ForgeMindMap";
 import { generateMindMap, linkMindMapSources, parseMindMap } from "../../utils/forge-mind-map";
@@ -31,11 +36,15 @@ interface ForgePanelProps extends ForgeQuizContext {
   vaultPath?: string | null;
   onOpenSource?: (path: string) => void;
 }
-type ForgeView = "tools" | "quiz" | "flashcards" | `deck:${string}`;
+type ForgeView = "tools" | "quiz" | "flashcards" | "reports" | `deck:${string}` | `report:${string}`;
 
 export function ForgePanel({ onClose, currentContent = "", activeFilePath, activeFileName = "Current note", allNoteNames = [], onOpenSource, ...quizContext }: ForgePanelProps) {
   const vaultPath = quizContext.vaultPath;
   const [view, setView] = useState<ForgeView>("tools");
+  const [reportLibrary, setReportLibrary] = useState<{ vaultPath: string | null; reports: LearningReport[]; skipped: number }>({ vaultPath: null, reports: [], skipped: 0 });
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportSource, setReportSource] = useState<ForgeSourceNote | undefined>();
+  const reportVersion = useRef(0);
   const [library, setLibrary] = useState<{ vaultPath: string | null; decks: FlashcardDeck[]; skipped: number }>({ vaultPath: null, decks: [], skipped: 0 });
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -46,6 +55,40 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
   const mounted = useRef(true);
   const decks = library.vaultPath === quizContext.vaultPath ? library.decks : [];
   const selectedDeck = decks.find(deck => `deck:${deck.id}` === view);
+  const reports = reportLibrary.vaultPath === vaultPath ? reportLibrary.reports : [];
+  const selectedReport = reports.find(report => `report:${report.id}` === view);
+  async function reloadReports() {
+    const scope = vaultRef.current;
+    if (!scope) return;
+    const version = ++reportVersion.current;
+    try {
+      const library = await loadLearningReports(scope);
+      if (mounted.current && vaultRef.current === scope && version === reportVersion.current) { setReportLibrary({ vaultPath: scope, ...library }); setReportError(null); }
+    } catch {
+      if (mounted.current && vaultRef.current === scope && version === reportVersion.current) setReportError("Saved reports could not be loaded. Please retry.");
+    }
+  }
+  useEffect(() => {
+    setReportLibrary({ vaultPath: vaultPath || null, reports: [], skipped: 0 }); setReportError(null); setReportSource(undefined);
+    void reloadReports();
+    const changed = (event: Event) => { if ((event as CustomEvent<{ vaultPath: string }>).detail?.vaultPath === vaultRef.current) void reloadReports(); };
+    window.addEventListener(REPORTS_CHANGED_EVENT, changed);
+    return () => { reportVersion.current++; window.removeEventListener(REPORTS_CHANGED_EVENT, changed); };
+  }, [vaultPath]);
+  function reportCreated(report: LearningReport) {
+    if (report.vaultPath !== vaultRef.current) return;
+    setReportLibrary(current => ({ vaultPath: report.vaultPath, skipped: current.vaultPath === report.vaultPath ? current.skipped : 0,
+      reports: [report, ...(current.vaultPath === report.vaultPath ? current.reports.filter(saved => saved.id !== report.id) : [])] }));
+    setView(`report:${report.id}`);
+  }
+  async function removeReport(id: string) {
+    const scope = vaultRef.current;
+    if (!scope) throw new Error("No vault open");
+    await deleteLearningReport(scope, id);
+    if (!mounted.current || scope !== vaultRef.current) return;
+    setReportLibrary(current => ({ ...current, reports: current.reports.filter(report => report.id !== id) }));
+    if (view === `report:${id}`) setView("tools");
+  }
   async function reload() {
     const vaultPath = vaultRef.current;
     if (!vaultPath) return;
@@ -180,6 +223,10 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
 
       {!creating && !opened && <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         {view === "quiz" ? <ForgeQuizForm {...quizContext} onBack={() => setView("tools")} />
+          : view === "reports" ? <ForgeReportForm {...quizContext} initialSource={reportSource} onBack={() => setView("tools")} onCreated={reportCreated}
+            onQuizzes={note => { void quizContext.onOpenNote?.(note.path); setView("quiz"); }} />
+          : selectedReport ? <LearningReportView key={selectedReport.id} report={selectedReport} onBack={() => setView("tools")} onOpenNote={quizContext.onOpenNote}
+            onRegenerate={() => { setReportSource({ path: selectedReport.sourceNotePath, name: selectedReport.sourceNoteTitle }); setView("reports"); }} />
           : view === "flashcards" ? <ForgeFlashcardForm {...quizContext} onBack={() => setView("tools")} onCreated={created} />
           : selectedDeck ? <FlashcardStudy key={selectedDeck.id} deck={selectedDeck} notice={notice} onBack={() => { setView("tools"); setNotice(null); }} onOpenNote={quizContext.onOpenNote} />
           : <div aria-label="Creation tools" className="grid grid-cols-2 gap-2">
@@ -187,21 +234,24 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
             <button
               key={title}
               type="button"
-              aria-disabled={title === "Mind Map" ? undefined : title !== "Quizzes" && title !== "Flashcards"}
-              aria-label={title === "Mind Map" ? "Create Mind Map" : title === "Quizzes" || title === "Flashcards" ? title : `${title} — Coming Soon`}
-              title={title === "Mind Map" || title === "Quizzes" || title === "Flashcards" ? description : `${description} — Coming Soon`}
-              onClick={title === "Mind Map" ? () => { setSelected(activeFilePath ? [activeFilePath] : []); setTopic(""); setCreating(true); } : title === "Quizzes" ? () => setView("quiz") : title === "Flashcards" ? () => setView("flashcards") : undefined}
-              className={`flex min-w-0 ${title === "Mind Map" || title === "Quizzes" || title === "Flashcards" ? "cursor-pointer" : "cursor-default"} flex-col items-start gap-2 rounded-lg border border-transparent bg-(--bg-secondary) p-3 text-left transition-colors duration-150 hover:bg-(--bg-active) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--interactive-accent)`}
+              aria-disabled={title === "Mind Map" ? undefined : !["Quizzes", "Flashcards", "Reports"].includes(title)}
+              aria-label={title === "Mind Map" ? "Create Mind Map" : ["Quizzes", "Flashcards", "Reports"].includes(title) ? title : `${title} — Coming Soon`}
+              title={["Mind Map", "Quizzes", "Flashcards", "Reports"].includes(title) ? description : `${description} — Coming Soon`}
+              onClick={title === "Mind Map" ? () => { setSelected(activeFilePath ? [activeFilePath] : []); setTopic(""); setCreating(true); } : title === "Quizzes" ? () => setView("quiz") : title === "Flashcards" ? () => setView("flashcards") : title === "Reports" ? () => { setReportSource(undefined); setView("reports"); } : undefined}
+              className={`flex min-w-0 ${["Mind Map", "Quizzes", "Flashcards", "Reports"].includes(title) ? "cursor-pointer" : "cursor-default"} flex-col items-start gap-2 rounded-lg border border-transparent bg-(--bg-secondary) p-3 text-left transition-colors duration-150 hover:bg-(--bg-active) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--interactive-accent)`}
             >
               <Icon size={17} className="shrink-0 text-(--interactive-accent)" aria-hidden="true" />
               <span className="max-w-full break-words text-[13px] font-medium">{title}</span>
-              <span className="text-[10px] text-(--text-muted)">{title === "Mind Map" ? "Create from sources" : title === "Quizzes" || title === "Flashcards" ? "Generate from a note" : "Coming Soon"}</span>
+              <span className="text-[10px] text-(--text-muted)">{title === "Mind Map" ? "Create from sources" : title === "Reports" ? "Learn from quiz results" : title === "Quizzes" || title === "Flashcards" ? "Generate from a note" : "Coming Soon"}</span>
             </button>
           ))}
         </div>}
 
         <ForgeCreations key={quizContext.vaultPath || "no-vault"} decks={decks} loading={loading} error={loadError} skipped={library.vaultPath === quizContext.vaultPath ? library.skipped : 0}
-          onRetry={() => void reload()} onOpen={openDeck} onDelete={removeDeck} hasOtherCreations={creations.length > 0}>
+          onRetry={() => void reload()} onOpen={openDeck} onDelete={removeDeck} hasOtherCreations={creations.length > 0}
+          reports={reports} onOpenReport={report => setView(`report:${report.id}`)} onDeleteReport={removeReport}>
+          {reportError && <p role="status" className="text-xs text-(--text-muted)">{reportError} <button type="button" onClick={() => void reloadReports()} className="rounded underline focus-visible:outline-2 focus-visible:outline-(--interactive-accent)">Retry Reports</button></p>}
+          {reportLibrary.vaultPath === vaultPath && reportLibrary.skipped > 0 && <p className="text-xs text-(--text-muted)">Some invalid saved reports were skipped; their data was preserved.</p>}
           {error && <p role="alert" className="text-xs text-(--text-muted)">{error}</p>}
           {creations.length > 0 && <div className="mt-3 flex flex-col gap-2">{creations.map(creation => <button key={creation.id} className={`${forgeButtonClass} justify-start text-left`} onClick={() => setOpened(creation)}><Network size={16} className="shrink-0 text-(--interactive-accent)" /><span className="min-w-0"><span className="block break-words">{creation.root.label}</span><span className="text-[10px] text-(--text-muted)">Mind Map · {creation.sources.length} sources · {new Date(creation.createdAt).toLocaleDateString()}</span></span></button>)}</div>}
         </ForgeCreations>

@@ -65,6 +65,23 @@ function registeredHandlers(
   return handlers;
 }
 
+describe("learning report storage IPC", () => {
+  it("accepts atomic report saves through the actual registered handler", async () => {
+    const writeDataFile = vi.fn().mockResolvedValue(undefined);
+    const handler = registeredHandlers({ writeDataFile }).get("data:write")!;
+    const options = { atomic: true, expectedVaultPath: "/isolated-test-vault" };
+    await handler({}, "forge-reports.json", '{"version":1,"reports":[]}', options);
+    expect(writeDataFile).toHaveBeenCalledWith("forge-reports.json", '{"version":1,"reports":[]}', options);
+  });
+  it("still rejects unapproved atomic paths and malformed save options", async () => {
+    const writeDataFile = vi.fn();
+    const handler = registeredHandlers({ writeDataFile }).get("data:write")!;
+    await expect(handler({}, "unapproved.json", "{}", { atomic: true, expectedVaultPath: "/isolated-test-vault" })).rejects.toThrow("write options");
+    await expect(handler({}, "forge-reports.json", "{}", { atomic: false, expectedVaultPath: "/isolated-test-vault" })).rejects.toThrow("write options");
+    expect(writeDataFile).not.toHaveBeenCalled();
+  });
+});
+
 describe("desktop:openExternal IPC", () => {
   beforeEach(() => {
     electronMocks.openExternal.mockClear();

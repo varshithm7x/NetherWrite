@@ -18,6 +18,8 @@ let allDiskComments: Record<string, NoteComment[]> = {};
 let commentsVaultPath: string | null = null;
 let vaultVersion = 0;
 
+export function getCommentsVaultPath(): string | null { return commentsVaultPath; }
+
 /** Relative note names must never share cached comments across vaults. */
 export function setCommentsVaultPath(vaultPath: string | null): void {
   if (commentsVaultPath === vaultPath) return;

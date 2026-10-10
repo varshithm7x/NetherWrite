@@ -2,6 +2,7 @@ import { safeStorage } from "electron";
 import { GoogleDriveProvider } from "./googleDriveProvider.js";
 import { GoogleDriveCredentialStore } from "./googleDriveStore.js";
 import { registerGoogleDriveIpc } from "./googleDriveIpc.js";
+import { registerYouTubeDiscoveryIpc, YouTubeDiscoveryService } from "./youtubeDiscovery.js";
 import { GoogleDrivePdfCache } from "./googleDrivePdfCache.js";
 import { GoogleDriveFileCache } from "./googleDriveFileCache.js";
 import { readAppsAuthConfig } from "./appsAuthConfig.js";
@@ -721,6 +722,7 @@ app.whenReady().then(async () => {
     console.error('[MCP] Failed to load configuration:', error);
   }
   registerMcpIpcHandlers(ipcMain, mcpManager, new McpActivityStore(userDataPath));
+  registerYouTubeDiscoveryIpc(ipcMain, new YouTubeDiscoveryService(userDataPath, safeStorage), () => mainWindow);
   googleDrive = new GoogleDriveProvider(new GoogleDriveCredentialStore(userDataPath, safeStorage),
     readAppsAuthConfig(path.join(__dirname, 'apps-auth.json'), app.isPackaged),
     async (url) => { await shell.openExternal(url); });

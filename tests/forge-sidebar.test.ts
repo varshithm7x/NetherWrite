@@ -81,20 +81,20 @@ async function renderSidebar(theme: Theme = "dark", width = 300) {
   return container;
 }
 
-it.each(["light", "dark"] as const)("renders Quizzes, Flashcards and three coming-soon cards under the %s theme at narrow width", async theme => {
+it.each(["light", "dark"] as const)("renders Quizzes, Flashcards and two coming-soon cards under the %s theme at narrow width", async theme => {
 
   const container = await renderSidebar(theme, 200);
   const grid = container.querySelector('[aria-label="Creation tools"]')!;
   const cards = [...grid.querySelectorAll<HTMLButtonElement>("button")];
   expect(cards.map(card => card.getAttribute("aria-label"))).toEqual([
-    "Slides — Coming Soon", "Create Mind Map", "Reports — Coming Soon",
+    "Slides — Coming Soon", "Create Mind Map", "Reports",
     "Flashcards", "Quizzes", "Infographics — Coming Soon",
 
   ]);
   expect(grid.classList.contains("grid-cols-2")).toBe(true);
   expect(container.querySelector(".right-sidebar-panel")?.getAttribute("style")).toContain("200px");
   for (const card of cards) {
-    const active = ["Quizzes", "Flashcards", "Create Mind Map"].includes(card.getAttribute("aria-label") || "");
+    const active = ["Quizzes", "Flashcards", "Create Mind Map", "Reports"].includes(card.getAttribute("aria-label") || "");
     expect(card.getAttribute("aria-disabled")).toBe(card.getAttribute("aria-label") === "Create Mind Map" ? null : active ? "false" : "true");
     act(() => { card.focus(); if (!active) card.click(); });
 
