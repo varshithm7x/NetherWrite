@@ -1,7 +1,8 @@
 # Cryptography Fundamentals
 
 ## Core idea
-Cryptography uses mathematical constructions to protect information and verify claims under defined assumptions. Use established libraries and protocols; constructing an apparently clever cipher is not evidence of security.
+CrCryptography uses mathematical constructionsmath to protect information and verify claims underbased definedon assumptions. Use establishedproven libraries and protocols; constructing anmaking apparentlya clever cipher is notdoesn't evidenceprove ofit's security.
+secure.yptography uses mathematical constructions to protect information and verify claims under defined assumptions. Use established libraries and protocols; constructing an apparently clever cipher is not evidence of security.
 
 ## Essential primitives
 - **Symmetric encryption:** one shared secret controls encryption and decryption.
@@ -38,3 +39,5 @@ Encoding is not encryption. Encryption without integrity can permit undetected m
 - [[08-Security-and-Cryptography/39-computer-security-principles|Computer Security Principles]] — Cryptographic primitives support a broader threat model and access-control design.
 
 [Back to contents](../README.md)
+
+[[39-computer-security-principles]]
