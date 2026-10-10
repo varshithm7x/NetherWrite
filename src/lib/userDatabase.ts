@@ -547,6 +547,7 @@ export function clearSavedUserDatabaseConfig(): void {
  * This does NOT install the schema -- call setupUserDatabase for that.
  */
 export function connectUserDatabase(config: UserDatabaseConfig): SupabaseClient<Database> {
+  if (userClient && userConfig?.supabaseUrl === config.supabaseUrl && userConfig.anonKey === config.anonKey) return userClient;
   userConfig = config;
   userClient = createClient<Database>(config.supabaseUrl, config.anonKey, {
     auth: {

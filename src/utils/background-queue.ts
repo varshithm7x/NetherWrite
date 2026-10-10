@@ -177,10 +177,9 @@ async function loadPersistedQueue(): Promise<void> {
 export function enqueueJob(job: BackgroundJob): void {
   const existing = _queue.findIndex((j) => j.path === job.path && j.type === job.type);
   if (existing >= 0) {
-    if (job.priority < _queue[existing].priority) {
-      _queue[existing].priority = job.priority;
-      _queue[existing].content = job.content;
-    }
+    const previous = _queue[existing];
+    _queue[existing] = { ...job, priority: Math.min(previous.priority, job.priority) };
+    sortQueue();
     return;
   }
   _queue.push(job);
@@ -257,6 +256,8 @@ async function processBatch(api: any): Promise<boolean> {
     if (version !== _queueVersion) return false;
     _processedCount++;
     reportStatus();
+    // Return control to input/painting between notes, including cached/lexical work.
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   // Persist queue state periodically

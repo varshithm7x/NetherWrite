@@ -7,6 +7,7 @@ import { DEFAULT_FLASHCARD_COUNT, MIN_FLASHCARD_COUNT, MAX_FLASHCARD_COUNT, gene
 import { ForgeGenerationError } from "../../utils/forge-generation";
 import type { FlashcardDeck } from "../../types/flashcards";
 import { prioritizeForegroundGeneration } from "../../utils/background-priority";
+import { ForgeGenerationButton, useForgeGenerationFeedback } from "./ForgeGenerationBoundary";
 
 interface ForgeFlashcardFormProps extends ForgeSourceContext {
   onBack: () => void;
@@ -15,6 +16,7 @@ interface ForgeFlashcardFormProps extends ForgeSourceContext {
 const focusClass = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--interactive-accent)";
 
 export function ForgeFlashcardForm(props: ForgeFlashcardFormProps) {
+  const beginFeedback = useForgeGenerationFeedback();
   const [count, setCount] = useState(String(DEFAULT_FLASHCARD_COUNT));
   const [generating, setGenerating] = useState(false);
   const [jobSource, setJobSource] = useState<ForgeSourceNote | null>(null);
@@ -38,6 +40,9 @@ export function ForgeFlashcardForm(props: ForgeFlashcardFormProps) {
     if (running.current || !sourceState.source || !sourceState.available || !props.vaultPath || !validCount || sourceState.pendingSelection) return;
     const controller = new AbortController();
     running.current = controller;
+    const finishFeedback = beginFeedback();
+    const stopFeedback = () => finishFeedback("cancelled");
+    controller.signal.addEventListener("abort", stopFeedback, { once: true });
     const release = prioritizeForegroundGeneration();
     releasePriority.current = release;
     const note = { ...sourceState.source };
@@ -53,12 +58,18 @@ export function ForgeFlashcardForm(props: ForgeFlashcardFormProps) {
         readNote: path => readForgeSourceNote(path, vaultPath, () => propsRef.current.readNoteContent),
         onProgress: message => { if (mounted.current && propsRef.current.vaultPath === vaultPath) setProgress(message); },
       });
-      if (mounted.current && !controller.signal.aborted && propsRef.current.vaultPath === vaultPath) propsRef.current.onCreated(deck);
+      if (mounted.current && !controller.signal.aborted && propsRef.current.vaultPath === vaultPath) {
+        finishFeedback("success");
+        propsRef.current.onCreated(deck);
+      }
     } catch (failure) {
+      finishFeedback(controller.signal.aborted ? "cancelled" : "error");
       if (mounted.current && propsRef.current.vaultPath === vaultPath) setError(timedOut ? "Flashcard generation timed out. Please retry."
         : failure instanceof ForgeGenerationError ? failure.message : "Flashcard generation failed. Please retry or check AI Settings.");
     } finally {
       clearTimeout(timeout);
+      controller.signal.removeEventListener("abort", stopFeedback);
+      finishFeedback("cancelled");
       release();
       if (releasePriority.current === release) releasePriority.current = null;
       if (running.current === controller) running.current = null;
@@ -79,10 +90,10 @@ export function ForgeFlashcardForm(props: ForgeFlashcardFormProps) {
           <p className="mb-0 mt-1.5 text-[10px] leading-relaxed text-(--text-muted)">Up to {MAX_FLASHCARD_COUNT} cards. Fewer may be created when evidence is limited.</p>
         </div>
         <p className="m-0 text-[10px] leading-relaxed text-(--text-muted)">Only this note is sent to your configured AI provider. Long notes may use only their beginning; coverage is reported with the saved deck.</p>
-        <button type="submit" disabled={generating || !sourceState.available || !props.vaultPath || !validCount || sourceState.pendingSelection}
+        <ForgeGenerationButton><button type="submit" disabled={generating || !sourceState.available || !props.vaultPath || !validCount || sourceState.pendingSelection}
           className={`flex w-full items-center justify-center gap-2 rounded-md border border-(--border-medium) bg-(--bg-active) px-3 py-2 font-medium hover:bg-(--bg-hover) disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`}>
           {generating && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}{generating ? "Generating…" : "Generate Flashcards"}
-        </button>
+        </button></ForgeGenerationButton>
         {generating && <button type="button" onClick={() => running.current?.abort()} className={`rounded text-(--text-muted) ${focusClass}`}>Cancel generation</button>}
       </form>
       <div role="status" aria-live="polite" className="mt-3 text-xs leading-relaxed">

@@ -122,3 +122,45 @@ it('only rasterizes nearby full-view pages and releases distant canvases', async
   expect(pages[1].querySelector('canvas')).toBeNull();
   expect(pages[1].getAttribute('style')).toContain('height:');
 });
+
+it('opens long PDFs using placeholders without fetching every page before display', async () => {
+  const prior = setup(true); await flush(); prior.remove(); await flush(); mocks.render.mockClear();
+  let notify: IntersectionObserverCallback = () => {};
+  vi.stubGlobal('IntersectionObserver', class { constructor(callback: IntersectionObserverCallback) { notify = callback; } observe() {} disconnect() {} });
+  const getPage = vi.fn(async (index: number) => ({ getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: (index === 300 ? 1200 : 800) * scale }), render: mocks.render }));
+  mocks.document.mockReturnValue({ promise: Promise.resolve({ numPages: 500, getPage }), destroy: mocks.destroy });
+  const { createPdfViewer } = await import('../src/components/documents/PdfViewer');
+  const view = createPdfViewer({ title: 'Long.pdf', mode: 'full', load: async () => new Uint8Array([1]) });
+  document.body.append(view); await flush();
+  const pages = view.querySelectorAll('.pdf-viewer-page');
+  expect(pages).toHaveLength(500);
+  expect(getPage).toHaveBeenCalledOnce();
+  expect(mocks.render).not.toHaveBeenCalled();
+  notify([{ target: pages[299], isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+  await flush();
+  expect(getPage).toHaveBeenCalledWith(300);
+  expect(getPage).toHaveBeenCalledTimes(2);
+  expect(pages[299].querySelector('canvas')).not.toBeNull();
+  expect(parseFloat((pages[299] as HTMLElement).style.height) / parseFloat((pages[299] as HTMLElement).style.width)).toBe(2);
+});
+
+it('does not duplicate pending page renders or allocate a canvas after the page leaves view', async () => {
+  const prior = setup(true); await flush(); prior.remove(); await flush(); mocks.render.mockClear();
+  let notify: IntersectionObserverCallback = () => {};
+  vi.stubGlobal('IntersectionObserver', class { constructor(callback: IntersectionObserverCallback) { notify = callback; } observe() {} disconnect() {} });
+  const page = { getViewport: () => ({ width: 600, height: 800 }), render: mocks.render };
+  let finish!: (value: typeof page) => void;
+  const getPage = vi.fn().mockResolvedValueOnce(page).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  mocks.document.mockReturnValue({ promise: Promise.resolve({ numPages: 2, getPage }), destroy: mocks.destroy });
+  const { createPdfViewer } = await import('../src/components/documents/PdfViewer');
+  const view = createPdfViewer({ title: 'Delayed.pdf', mode: 'full', load: async () => new Uint8Array([1]) });
+  document.body.append(view); await flush();
+  const slot = view.querySelectorAll('.pdf-viewer-page')[1];
+  const entry = { target: slot, isIntersecting: true } as IntersectionObserverEntry;
+  notify([entry], {} as IntersectionObserver); notify([entry], {} as IntersectionObserver);
+  expect(getPage).toHaveBeenCalledTimes(2);
+  notify([{ target: slot, isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver);
+  finish(page); await flush();
+  expect(slot.querySelector('canvas')).toBeNull();
+  expect(mocks.render).not.toHaveBeenCalled();
+});

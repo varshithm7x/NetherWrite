@@ -157,6 +157,28 @@ export class FileSystemManager {
     await fs.promises.writeFile(absolutePath, content);
   }
 
+  /** Commit an original and its searchable content to the vault that initiated the upload. */
+  async importResource(expectedVault: string, originalPath: string, bytes: Uint8Array, notePath: string | null, content: string): Promise<void> {
+    if (this.vaultPath !== expectedVault) throw new Error('The vault changed during upload.');
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength > 50 * 1024 * 1024 || typeof content !== 'string' || content.length > 2_100_000) throw new Error('Invalid resource size.');
+    if (!/^Uploads\/[a-f0-9-]{36}\/[^/\\]+$/.test(originalPath)) throw new Error('Invalid upload path.');
+    if (notePath && (path.posix.dirname(notePath) !== path.posix.dirname(originalPath) || !notePath.endsWith('.md') || notePath === originalPath)) throw new Error('Invalid content path.');
+    // Resolve both paths before awaiting, so switching vaults cannot redirect either write.
+    const original = this.resolvePath(originalPath);
+    const note = notePath ? this.resolvePath(notePath) : null;
+    const folder = path.dirname(original);
+    await fs.promises.mkdir(path.dirname(folder), { recursive: true });
+    await fs.promises.mkdir(folder);
+    try {
+      await fs.promises.writeFile(original, bytes, { flag: 'wx' });
+      if (note) await fs.promises.writeFile(note, content, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      // This newly-created import directory is owned by this operation only.
+      await fs.promises.rm(folder, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
   /** Create a new file */
   async createFile(filePath: string, content: string = ''): Promise<void> {
     const absolutePath = this.resolvePath(filePath);

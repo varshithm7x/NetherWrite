@@ -6,6 +6,8 @@ import { UnlinkedMentionsPanel } from "../panels/UnlinkedMentionsPanel";
 import { ForgePanel } from "../panels/ForgePanel";
 import { getPluginScopeClass } from "../../lib/pluginStyles";
 import type { Theme, FileEntry } from "../../types";
+import { resourceContentPath } from "../../utils/resource-paths";
+import { getAPI } from "../../utils/api";
 
 const AIPage = React.lazy(() => import("../ai/AIPage").then(m => ({ default: m.AIPage })));
 
@@ -100,6 +102,44 @@ export function RightSidebar({
   rightPluginViews = [],
   onClosePluginView,
 }: RightSidebarProps) {
+  const isPdf = /\.pdf$/i.test(activeFilePath || "");
+  const companion = isPdf && activeFilePath ? resourceContentPath(activeFilePath) : null;
+  const sourcePath = isPdf ? allNoteNames.find(note => note.path === companion)?.path || null : activeFilePath;
+  const reader = React.useRef(readNoteContent);
+  reader.current = readNoteContent;
+  const [pdfText, setPdfText] = React.useState<{ path: string; vault: string; content: string } | null>(null);
+  React.useEffect(() => {
+    setPdfText(null);
+    if (!isPdf || !sourcePath || !vaultPath) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const content = await (reader.current ? reader.current(sourcePath) : getAPI().readFile(sourcePath));
+        if (!cancelled) setPdfText({ path: sourcePath, vault: vaultPath, content: content || "" });
+      } catch { if (!cancelled) setPdfText(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [isPdf, sourcePath, vaultPath]);
+  const pdfReady = pdfText?.path === sourcePath && pdfText?.vault === vaultPath;
+  const forgePath = isPdf && !pdfReady ? null : sourcePath;
+  const sourceContent = isPdf ? pdfReady ? pdfText!.content : "" : currentContent;
+  const pdfSources = React.useMemo(() => {
+    const sources = new Map<string, string>();
+    function collect(entries: FileEntry[]) {
+      for (const entry of entries) {
+        if (entry.isDirectory) collect(entry.children || []);
+        else if (/\.pdf$/i.test(entry.path)) sources.set(resourceContentPath(entry.path), entry.path);
+      }
+    }
+    collect(fileTree);
+    if (isPdf && activeFilePath && companion) sources.set(companion, activeFilePath);
+    return sources;
+  }, [fileTree, activeFilePath, companion, isPdf]);
+  const sourceNotes = allNoteNames.map(note => {
+    const original = pdfSources.get(note.path);
+    return original ? { ...note, name: original.split("/").pop() || note.name } : note;
+  });
+  const openSource = (path: string) => openFile(pdfSources.get(path) || path);
   const activePluginView = rightPluginViews.find((v) => v.viewType === activeTab);
   const [keepIntelligenceMounted, setKeepIntelligenceMounted] = React.useState(activeTab === "ai");
   const [keepForgeMounted, setKeepForgeMounted] = React.useState(activeTab === "forge");
@@ -189,11 +229,11 @@ export function RightSidebar({
 
         {(activeTab === "forge" || keepForgeMounted) && <div hidden={activeTab !== "forge"} inert={activeTab !== "forge"} className={`right-sidebar-view h-full ${activeTab !== "forge" ? "hidden" : ""}`}>
             <ForgePanel key={vaultPath || "no-vault"} onClose={onClose} vaultPath={vaultPath}
-              currentContent={currentContent} activeFilePath={activeFilePath} activeFileName={activeFileName}
-              allNoteNames={allNoteNames} onOpenSource={path => { void openFile(path); }}
-              activeNote={activeFilePath ? { name: activeFileName, path: activeFilePath } : null}
-              notes={allNoteNames.filter(note => /\.md$/i.test(note.path))}
-              readNoteContent={readNoteContent} onOpenNote={path => openFile(path)} />
+              currentContent={sourceContent} activeFilePath={forgePath} activeFileName={activeFileName}
+              allNoteNames={sourceNotes} onOpenSource={path => { void openSource(path); }}
+              activeNote={forgePath ? { name: activeFileName, path: forgePath } : null}
+              notes={sourceNotes.filter(note => /\.md$/i.test(note.path))}
+              readNoteContent={readNoteContent} onOpenNote={openSource} />
           </div>}
 
         {/* Retain Intelligence's local state when switching to Forge. */}
@@ -204,9 +244,9 @@ export function RightSidebar({
                 vaultPath={vaultPath}
                 theme={theme || "dark"}
                 fileTree={fileTree}
-                activeNotePath={activeFilePath}
+                activeNotePath={sourcePath}
                 onOpenNote={(path) => {
-                  void openFile(path);
+                  void openSource(path);
                 }}
                 onClose={() => onClose?.()}
                 isFullScreen={false}

@@ -9,7 +9,7 @@ export function PdfDocumentView({ path, title, onFocus }: { path: string; title:
     const viewer = createPdfViewer({ title, mode: 'full', load: () => getAPI().readBinary(path) });
     viewer.classList.add('pdf-viewer-document');
     host.current?.append(viewer);
-    return () => viewer.remove();
+    return () => { viewer.dispatchEvent(new Event('pdf-viewer:dispose')); viewer.remove(); };
   }, [path, title]);
   return <section className="pdf-document-view" onPointerDown={onFocus} onFocus={onFocus} aria-label={title}>
     <h2>{title}</h2>

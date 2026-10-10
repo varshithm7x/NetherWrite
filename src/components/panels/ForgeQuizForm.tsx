@@ -6,6 +6,7 @@ import type { QuizGenerationResult, QuizSourceNote } from "../../utils/quiz-gene
 import { readForgeSourceNote } from "../../utils/forge-note-source";
 import type { ForgeSourceContext } from "../../utils/forge-note-source";
 import { ForgeNoteSource, useForgeNoteSource } from "./ForgeNoteSource";
+import { ForgeGenerationButton, useForgeGenerationFeedback } from "./ForgeGenerationBoundary";
 
 export type ForgeQuizContext = ForgeSourceContext;
 
@@ -18,6 +19,7 @@ const inputClass = `w-full min-w-0 rounded-md border border-(--border-medium) bg
 
 export function ForgeQuizForm(props: ForgeQuizFormProps) {
   const { notes = [], vaultPath } = props;
+  const beginFeedback = useForgeGenerationFeedback();
   const [count, setCount] = useState(String(DEFAULT_QUIZ_QUESTIONS));
   const [generating, setGenerating] = useState(false);
   const [jobSource, setJobSource] = useState<QuizSourceNote | null>(null);
@@ -51,6 +53,9 @@ export function ForgeQuizForm(props: ForgeQuizFormProps) {
     if (running.current || !source || !available || !vaultPath || !validCount || pendingSelection) return;
     const controller = new AbortController();
     running.current = controller;
+    const finishFeedback = beginFeedback();
+    const stopFeedback = () => finishFeedback("cancelled");
+    controller.signal.addEventListener("abort", stopFeedback, { once: true });
     setGenerating(true);
     setJobSource(source);
     setResult(null);
@@ -65,13 +70,19 @@ export function ForgeQuizForm(props: ForgeQuizFormProps) {
           && (propsRef.current.notes || []).some(candidate => candidate.path === note.path),
         readNote: path => readForgeSourceNote(path, sourceVault, () => propsRef.current.readNoteContent),
       });
-      if (mounted.current && !controller.signal.aborted && propsRef.current.vaultPath === sourceVault) setResult(generated);
+      if (mounted.current && !controller.signal.aborted && propsRef.current.vaultPath === sourceVault) {
+        finishFeedback("success");
+        setResult(generated);
+      }
     } catch (failure) {
+      finishFeedback(controller.signal.aborted ? "cancelled" : "error");
       if (mounted.current && propsRef.current.vaultPath === sourceVault) {
         setError(failure instanceof QuizGenerationError ? failure.message : "Quiz generation failed. Please retry or check AI Settings.");
       }
     } finally {
       clearTimeout(timeout);
+      controller.signal.removeEventListener("abort", stopFeedback);
+      finishFeedback("cancelled");
       if (running.current === controller) running.current = null;
       if (mounted.current) { setGenerating(false); setJobSource(null); }
     }
@@ -102,9 +113,9 @@ export function ForgeQuizForm(props: ForgeQuizFormProps) {
           <p className="mb-0 mt-1.5 text-[10px] leading-relaxed text-(--text-muted)">Total across all topics, up to {MAX_QUIZ_QUESTIONS}. Fewer may be created when evidence is limited.</p>
         </div>
         <p className="m-0 text-[10px] leading-relaxed text-(--text-muted)">Only this note is sent to your configured AI provider. Long notes may use only their beginning; coverage is reported after generation.</p>
-        <button type="submit" disabled={generating || !available || !vaultPath || !validCount || pendingSelection} className={`flex w-full items-center justify-center gap-2 rounded-md border border-(--border-medium) bg-(--bg-active) px-3 py-2 font-medium hover:bg-(--bg-hover) disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`}>
+        <ForgeGenerationButton><button type="submit" disabled={generating || !available || !vaultPath || !validCount || pendingSelection} className={`flex w-full items-center justify-center gap-2 rounded-md border border-(--border-medium) bg-(--bg-active) px-3 py-2 font-medium hover:bg-(--bg-hover) disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`}>
           {generating && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}{generating ? "Generating…" : "Generate Quiz"}
-        </button>
+        </button></ForgeGenerationButton>
         {generating && <button type="button" onClick={() => running.current?.abort()} className={`rounded text-(--text-muted) ${focusClass}`}>Cancel generation</button>}
       </form>
       <div role="status" aria-live="polite" className="mt-3 text-xs leading-relaxed">

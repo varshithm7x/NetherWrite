@@ -1,4 +1,4 @@
-import { ArrowLeft, Blocks, ChartColumn, FileText, Layers, ListChecks, Network, PanelRightClose, Presentation } from "lucide-react";
+import { ArrowLeft, Blocks, FileText, Layers, ListChecks, Network, PanelRightClose } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ForgeQuizForm } from "./ForgeQuizForm";
 import type { ForgeQuizContext } from "./ForgeQuizForm";
@@ -17,14 +17,13 @@ import { ForgeMindMap, forgeButtonClass } from "./ForgeMindMap";
 import { generateMindMap, linkMindMapSources, parseMindMap } from "../../utils/forge-mind-map";
 import type { MindMapCreation, MindMapSource } from "../../utils/forge-mind-map";
 import { getAPI } from "../../utils/api";
+import { ForgeGenerationBoundary, ForgeGenerationButton, useForgeGenerationFeedback } from "./ForgeGenerationBoundary";
 
 const FORGE_TOOLS = [
-  { title: "Slides", description: "Presentation generation", icon: Presentation },
   { title: "Mind Map", description: "Visual knowledge mapping", icon: Network },
   { title: "Reports", description: "Structured document generation", icon: FileText },
   { title: "Flashcards", description: "Learning and revision cards", icon: Layers },
   { title: "Quizzes", description: "Knowledge assessment", icon: ListChecks },
-  { title: "Infographics", description: "Visual information summaries", icon: ChartColumn },
 ];
 
 interface ForgePanelProps extends ForgeQuizContext {
@@ -38,7 +37,12 @@ interface ForgePanelProps extends ForgeQuizContext {
 }
 type ForgeView = "tools" | "quiz" | "flashcards" | "reports" | `deck:${string}` | `report:${string}`;
 
-export function ForgePanel({ onClose, currentContent = "", activeFilePath, activeFileName = "Current note", allNoteNames = [], onOpenSource, ...quizContext }: ForgePanelProps) {
+export function ForgePanel(props: ForgePanelProps) {
+  return <ForgeGenerationBoundary><ForgePanelContent {...props} /></ForgeGenerationBoundary>;
+}
+
+function ForgePanelContent({ onClose, currentContent = "", activeFilePath, activeFileName = "Current note", allNoteNames = [], onOpenSource, ...quizContext }: ForgePanelProps) {
+  const beginFeedback = useForgeGenerationFeedback();
   const vaultPath = quizContext.vaultPath;
   const [view, setView] = useState<ForgeView>("tools");
   const [reportLibrary, setReportLibrary] = useState<{ vaultPath: string | null; reports: LearningReport[]; skipped: number }>({ vaultPath: null, reports: [], skipped: 0 });
@@ -176,6 +180,8 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
     return () => { cancelled = true; };
   }, [opened?.id]);
   async function generate() {
+    if (busy) return;
+    const finishFeedback = beginFeedback();
     setBusy(true);
     setError("");
     try {
@@ -186,18 +192,23 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
       const result = await generateMindMap(sources, message => { if (mounted.current) setProgress(message); }, topic.trim());
       if (!mounted.current) return;
       const next = [result, ...creations];
+      let saved = true;
       try {
         await getAPI().dataWrite("forge-mind-maps.json", JSON.stringify(next));
       } catch {
+        saved = false;
         setError("Map created, but saving failed. Download it before closing Forge.");
       }
       if (!mounted.current) return;
       setCreations(next);
+      finishFeedback(saved ? "success" : "error");
       setCreating(false);
       setOpened(result);
     } catch (err) {
+      finishFeedback("error");
       if (mounted.current) setError(err instanceof Error ? err.message : "Mind map generation failed. Please try again.");
     } finally {
+      finishFeedback("cancelled");
       if (mounted.current) { setBusy(false); setProgress(""); }
     }
   }
@@ -271,7 +282,7 @@ export function ForgePanel({ onClose, currentContent = "", activeFilePath, activ
           </fieldset>
           {error && <p role="alert" className="text-sm text-(--text-muted)">{error}</p>}
           {busy && <p role="status" className="text-sm text-(--text-muted)">{progress || "Reading sources…"}</p>}
-          <div className="mt-auto flex justify-end"><button className={forgeButtonClass} disabled={busy || !topic.trim() || !selected.length || !vaultPath || !loaded} onClick={() => void generate()}>{busy ? "Analyzing…" : "Generate mind map"}</button></div>
+          <div className="mt-auto flex justify-end"><ForgeGenerationButton><button className={forgeButtonClass} disabled={busy || !topic.trim() || !selected.length || !vaultPath || !loaded} onClick={() => void generate()}>{busy ? "Analyzing…" : "Generate mind map"}</button></ForgeGenerationButton></div>
         </div>
       </section>}
       {opened && <section aria-label={`${opened.root.label} Mind Map`} className="flex min-h-0 flex-1 flex-col">

@@ -7,6 +7,7 @@
  */
 
 import { createMockAPI } from "./mockAPI";
+import { persistResource } from "./resource-persistence";
 
 type API = typeof window.electronAPI;
 
@@ -27,6 +28,15 @@ function dispatchFileChange(type: string, detail: FileChangeDetail): void {
 function observeFileChanges(api: API): API {
   return {
     ...api,
+    async importResource(vaultPath: string, originalPath: string, bytes: Uint8Array, notePath: string | null, content: string): Promise<void> {
+      await persistResource(api, vaultPath, originalPath, bytes, notePath, content);
+      if (await api.getVaultPath() !== vaultPath) return;
+      if (notePath) {
+        const detail = { path: notePath, content, created: true };
+        dispatchFileChange("netherwrite:file-created", detail);
+        dispatchFileChange("netherwrite:file-written", detail);
+      }
+    },
     async createFile(filePath: string, content?: string): Promise<void> {
       const existed = await api.fileExists(filePath).catch(() => false);
       await api.createFile(filePath, content);
