@@ -20,6 +20,7 @@ import './lib/obsidian-api/dom-extensions';
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { setCommentsVaultPath } from "./utils/commentsStore";
+import { renameFlashcardSources } from "./utils/flashcardsStore";
 import { Editor } from "./components/editor/Editor";
 import { EditorHeader } from "./components/editor/EditorHeader";
 import { FormattingToolbar } from "./components/layout/FormattingToolbar";
@@ -4012,6 +4013,9 @@ export default function App() {
       const customEvent = event as CustomEvent<{ oldPath: string; newPath: string; isDirectory?: boolean }>;
       const { oldPath, newPath, isDirectory } = customEvent.detail || {};
       if (!oldPath || !newPath || oldPath === newPath) return;
+      if (vaultPath) void renameFlashcardSources(vaultPath, oldPath, newPath, Boolean(isDirectory)).catch(() => {
+        console.warn("[Forge] Could not update flashcard source references after rename.");
+      });
       updateEmbeddingsAfterRename(oldPath, newPath, Boolean(isDirectory));
       updateOpenPathsAfterRename(oldPath, newPath, Boolean(isDirectory));
       void refreshFileTree();
@@ -4098,6 +4102,7 @@ export default function App() {
     refreshFileTree,
     updateEmbeddingsAfterRename,
     updateOpenPathsAfterRename,
+    vaultPath,
     tabs,
     settings.coreBacklinks,
     settings.coreCommandPalette,
@@ -5733,6 +5738,10 @@ export default function App() {
             <div className="flex h-full min-w-0 w-full flex-row overflow-hidden">
               {renderRightSidebar && (
                 <RightSidebar
+                  readNoteContent={async path => {
+                    if (currentContentPathRef.current === path) return currentContentRef.current;
+                    return api.readFile(path);
+                  }}
                   activeTab={rightSidebarTab}
                   currentContent={currentContent}
                   allNoteNames={allNoteNames}

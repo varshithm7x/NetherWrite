@@ -32,7 +32,7 @@ import { getSmartEmbed, getDisplayDomain, cleanEmbedUrl, toggleUrlInMarkdown } f
 import { runMarkdownPostProcessors } from "../../lib/obsidian-api/markdown";
 import type { AppSettings } from "../settings/SettingsPage";
 import type { NoteComment, PendingComment } from "../../types/comments";
-import { getCommentDisplayText } from "../../utils/comment-anchors";
+import { getCommentDisplayText, normalizeCommentSource } from "../../utils/comment-anchors";
 import { protectInvalidMath } from "../../utils/markdownMathSafety";
 
 import { initializeInteractiveMermaid } from "../../utils/mermaid-layout-engine";
@@ -526,10 +526,11 @@ function getCommentRangeText(source: string, from: number, to: number, fallback:
   return getCommentDisplayText(fallback) || getCommentDisplayText(ranged);
 }
 
-function getSourceOccurrenceIndex(source: string, phrase: string, from: number): number {
+function getSourceOccurrenceIndex(source: string, phrase: string, from: number, flexibleWhitespace = false): number {
   if (!phrase) return 0;
   const before = getCommentDisplayText(source.slice(0, Math.max(0, from))).toLowerCase();
-  const regex = new RegExp(escapeRegExp(phrase.toLowerCase()), "g");
+  const pattern = flexibleWhitespace ? phrase.trim().toLowerCase().split(/\s+/).map(escapeRegExp).join("\\s+") : escapeRegExp(phrase.toLowerCase());
+  const regex = new RegExp(pattern, "g");
   let count = 0;
   while (regex.exec(before)) count++;
   return count;
@@ -556,6 +557,7 @@ function markHtmlTextOccurrence(
   phrase: string,
   occurrenceIndex: number,
   attrs: Record<string, string>,
+  flexibleWhitespace = false,
 ): string {
   if (!phrase.trim() || typeof window === "undefined" || typeof DOMParser === "undefined") return html;
 
@@ -579,7 +581,17 @@ function markHtmlTextOccurrence(
     });
   }
 
-  const match = findNthOccurrence(fullText, phrase, occurrenceIndex) || findNthOccurrenceInsensitive(fullText, phrase, occurrenceIndex);
+  const match = flexibleWhitespace
+    ? (() => {
+      const regex = new RegExp(phrase.trim().split(/\s+/).map(escapeRegExp).join("\\s+"), "gi");
+      let found: RegExpExecArray | null;
+      let occurrence = 0;
+      while ((found = regex.exec(fullText)) !== null) {
+        if (occurrence++ === occurrenceIndex) return { index: found.index, length: found[0].length };
+      }
+      return null;
+    })()
+    : findNthOccurrence(fullText, phrase, occurrenceIndex) || findNthOccurrenceInsensitive(fullText, phrase, occurrenceIndex);
   if (!match) return html;
 
   const endIndex = match.index + match.length;
@@ -626,8 +638,10 @@ export function applyCommentHighlightsToHtml(
     for (const c of comments) {
       if (c.resolved) continue;
       if (c.type === "quiz" && c.from >= c.to) continue;
-      const phrase = getCommentRangeText(source, c.from, c.to, c.selectedText);
-      const occurrenceIndex = getSourceOccurrenceIndex(source, phrase, c.from);
+      const quiz = c.type === "quiz";
+      const commentSource = quiz ? normalizeCommentSource(source) : source;
+      const phrase = getCommentRangeText(commentSource, c.from, c.to, c.selectedText);
+      const occurrenceIndex = getSourceOccurrenceIndex(commentSource, phrase, c.from, quiz);
       result = markHtmlTextOccurrence(
         result,
         phrase,
@@ -636,6 +650,7 @@ export function applyCommentHighlightsToHtml(
           class: `cm-comment-highlight${c.id === activeCommentId ? " cm-comment-active" : ""}`,
           "data-comment-id": c.id,
         },
+        quiz,
       );
     }
   }

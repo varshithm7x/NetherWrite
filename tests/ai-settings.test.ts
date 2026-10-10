@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as diskStore from "../src/utils/disk-store";
 import {
   AI_SETTINGS_CHANGED_EVENT,
   DEFAULT_MODEL_ID,
@@ -10,12 +11,14 @@ import {
   loadSettings,
   loadSettingsAsync,
   parseProviderError,
+  readProviderError,
   saveSettings,
   _resetSettingsCache,
 } from "../src/utils/ai-settings";
 import { readData, writeData } from "../src/utils/disk-store";
 
 describe("AI settings", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     _resetSettingsCache();
     let store: Record<string, string> = {};
@@ -134,5 +137,35 @@ describe("AI settings", () => {
     expect(unauthorized).toMatch(/API key/i);
     const payment = await parseProviderError(new Response("{}", { status: 402 }));
     expect(payment).toMatch(/credits/i);
+  });
+
+  it.each(["insufficient_quota", "credit_balance_exhausted", "project_spend_limit_exceeded", "organization_spend_limit_exceeded", "organization_usage_limit_exceeded"])("distinguishes billing/quota code %s from request rate limits", async code => {
+    const failure = await readProviderError(new Response(JSON.stringify({ error: { code, message: "private response" } }), { status: 429 }));
+    expect(failure.kind).toBe("quota");
+    expect(failure.message).toMatch(/billing/i);
+    expect(failure.message).not.toContain("private response");
+    const rate = await readProviderError(new Response(JSON.stringify({ error: { code: "rate_limit_exceeded", type: "rate_limit_error" } }), { status: 429 }));
+    expect(rate.kind).toBe("rate-limit");
+  });
+
+  it("recognizes the broader insufficient_quota type for billing failures", async () => {
+    const failure = await readProviderError(new Response(JSON.stringify({ error: { type: "insufficient_quota" } }), { status: 429 }));
+    expect(failure.kind).toBe("quota");
+  });
+
+  it("normalizes an OpenRouter-prefixed OpenAI model and trims copied credentials without persisting them in localStorage", () => {
+    saveSettings({ apiKey: "  test-key  ", modelId: "openai/gpt-4o", provider: "openai", customBaseUrl: "", webGrounding: false });
+    expect(loadAIConfig()).toMatchObject({ apiKey: "test-key", modelId: "gpt-4o", provider: "openai" });
+    expect(window.localStorage.getItem("netherwrite-ai-settings")).toBeNull();
+  });
+
+  it("does not overwrite freshly saved credentials with an older asynchronous disk load", async () => {
+    let finish!: (value: unknown) => void;
+    vi.spyOn(diskStore, "readData").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = loadSettingsAsync();
+    saveSettings({ apiKey: "new-test-key", modelId: "gpt-4o", provider: "openai", customBaseUrl: "", webGrounding: false });
+    finish({ apiKey: "old-test-key", modelId: "old-model", provider: "openrouter" });
+    expect(await pending).toMatchObject({ apiKey: "new-test-key", modelId: "gpt-4o", provider: "openai" });
+    expect(loadAIConfig()?.apiKey).toBe("new-test-key");
   });
 });

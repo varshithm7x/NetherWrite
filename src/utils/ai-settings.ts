@@ -164,6 +164,7 @@ export const AI_SETTINGS_CHANGED_EVENT = "ai-settings-changed";
 
 let _settingsCache: AISettings | null = null;
 let _loadPromise: Promise<AISettings> | null = null;
+let _settingsRevision = 0;
 
 const DEFAULT_SETTINGS: AISettings = {
   apiKey: "",
@@ -215,10 +216,12 @@ export function loadSettings(): AISettings {
 
 export async function loadSettingsAsync(): Promise<AISettings> {
   if (_loadPromise) return _loadPromise;
+  const revision = _settingsRevision;
 
   _loadPromise = (async (): Promise<AISettings> => {
     // 1. Read from disk (.netherwrite/ai-settings.json)
     const diskData = await readData<AISettings>(DISK_SETTINGS_PATH);
+    if (revision !== _settingsRevision) return _settingsCache || { ...DEFAULT_SETTINGS };
     if (diskData) {
       const result: AISettings = { ...DEFAULT_SETTINGS, ...diskData };
       _settingsCache = result;
@@ -257,6 +260,7 @@ export async function loadSettingsAsync(): Promise<AISettings> {
 }
 
 export function saveSettings(settings: AISettings): void {
+  _settingsRevision++;
   _settingsCache = { ...DEFAULT_SETTINGS, ...settings };
   void writeData(DISK_SETTINGS_PATH, _settingsCache);
   notifySettingsChanged();
@@ -270,6 +274,7 @@ export function saveSettings(settings: AISettings): void {
 }
 
 export function _resetSettingsCache(): void {
+  _settingsRevision++;
   _settingsCache = null;
   _loadPromise = null;
 }
@@ -284,20 +289,22 @@ export interface AIConfig {
 
 export function loadAIConfig(): AIConfig | null {
   const s = loadSettings();
-  if (!s.apiKey) return null;
+  const apiKey = typeof s.apiKey === "string" ? s.apiKey.trim() : "";
+  if (!apiKey) return null;
   const models = getModelsForProvider(s.provider);
   const model = models.find((m) => m.id === s.modelId);
-  const modelId = s.modelId || models[0]?.id || DEFAULT_MODEL_ID;
+  const selectedModelId = s.modelId?.trim() || models[0]?.id || DEFAULT_MODEL_ID;
+  const modelId = s.provider === "openai" ? selectedModelId.replace(/^openai\//, "") : selectedModelId;
   const supportsGrounding =
     (s.provider === "openrouter" || s.provider === "openai") &&
     s.webGrounding &&
     (model?.supportsGrounding ?? false);
-  return { apiKey: s.apiKey, modelId, supportsGrounding, provider: s.provider, customBaseUrl: s.customBaseUrl };
+  return { apiKey, modelId, supportsGrounding, provider: s.provider, customBaseUrl: s.customBaseUrl };
 }
 
 export function getBaseUrl(config: AIConfig): string {
   const custom = config.customBaseUrl?.trim();
-  return custom || getPreset(config.provider).baseUrl;
+  return (custom || getPreset(config.provider).baseUrl).replace(/\/+$/, "");
 }
 
 export function getProviderHeaders(config: AIConfig): Record<string, string> {
@@ -312,31 +319,46 @@ export function getProviderHeaders(config: AIConfig): Record<string, string> {
   return base;
 }
 
-export async function parseProviderError(response: Response): Promise<string> {
-  let errObj: { message?: string; metadata?: { provider_name?: string } } | undefined;
+export interface AIProviderFailure {
+  message: string;
+  status: number;
+  kind: "quota" | "rate-limit" | "other";
+}
+
+export async function readProviderError(response: Response): Promise<AIProviderFailure> {
+  let errObj: { message?: string; code?: string; type?: string; metadata?: { provider_name?: string } } | undefined;
   try {
     const body = await response.json();
     errObj = body?.error;
   } catch { /* couldn't parse JSON */ }
 
   const providerName = errObj?.metadata?.provider_name;
+  const quotaCodes = ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded"];
+  if (response.status === 429 && (quotaCodes.includes(errObj?.code || "") || errObj?.type === "insufficient_quota")) {
+    return { status: 429, kind: "quota", message: "API credits, quota, or billing limit reached. Check API billing and project limits; retrying alone will not resolve this." };
+  }
+  const failure = (message: string): AIProviderFailure => ({ message, status: response.status, kind: response.status === 429 ? "rate-limit" : "other" });
 
   switch (response.status) {
-    case 401: return "Invalid or missing API key. Check your key in AI Settings.";
-    case 402: return "Insufficient credits. Add credits or switch to a free model.";
-    case 403: return "Content flagged by the provider's safety filter.";
-    case 404: return "Model unavailable. Switch to another model in AI Settings.";
-    case 408: return "Request timed out. Try again.";
+    case 401: return failure("Invalid or missing API key. Check your key in AI Settings.");
+    case 402: return failure("Insufficient credits. Add credits or switch to a free model.");
+    case 403: return failure("Content flagged by the provider's safety filter.");
+    case 404: return failure("Model unavailable. Switch to another model in AI Settings.");
+    case 408: return failure("Request timed out. Try again.");
     case 429:
-      return providerName
+      return failure(providerName
         ? `${providerName} is rate-limiting. Retry later or switch models.`
-        : "Too many requests. Slow down and try again.";
+        : "Too many requests. Slow down and try again.");
     case 502:
     case 503:
-      return providerName
+      return failure(providerName
         ? `${providerName} is temporarily unavailable. Try again or switch models.`
-        : "The AI provider is temporarily unavailable. Try again.";
+        : "The AI provider is temporarily unavailable. Try again.");
     default:
-      return errObj?.message ?? `Request failed (${response.status}). Check your settings.`;
+      return failure(typeof errObj?.message === "string" ? errObj.message : `Request failed (${response.status}). Check your settings.`);
   }
+}
+
+export async function parseProviderError(response: Response): Promise<string> {
+  return (await readProviderError(response)).message;
 }

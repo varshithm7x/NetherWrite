@@ -68,24 +68,27 @@ async function renderSidebar(theme: Theme = "dark", width = 300) {
   return container;
 }
 
-it.each(["light", "dark"] as const)("renders six inert creation cards under the %s theme at narrow width", async theme => {
+it.each(["light", "dark"] as const)("renders Quizzes, Flashcards and four coming-soon cards under the %s theme at narrow width", async theme => {
   const container = await renderSidebar(theme, 200);
   const grid = container.querySelector('[aria-label="Creation tools"]')!;
   const cards = [...grid.querySelectorAll<HTMLButtonElement>("button")];
   expect(cards.map(card => card.getAttribute("aria-label"))).toEqual([
     "Slides — Coming Soon", "Mind Map — Coming Soon", "Reports — Coming Soon",
-    "Flashcards — Coming Soon", "Quizzes — Coming Soon", "Infographics — Coming Soon",
+    "Flashcards", "Quizzes", "Infographics — Coming Soon",
   ]);
   expect(grid.classList.contains("grid-cols-2")).toBe(true);
   expect(container.querySelector(".right-sidebar-panel")?.getAttribute("style")).toContain("200px");
   for (const card of cards) {
-    expect(card.getAttribute("aria-disabled")).toBe("true");
-    act(() => { card.focus(); card.click(); });
+    const active = ["Quizzes", "Flashcards"].includes(card.getAttribute("aria-label") || "");
+    expect(card.getAttribute("aria-disabled")).toBe(active ? "false" : "true");
+    act(() => { card.focus(); if (!active) card.click(); });
     expect(document.activeElement).toBe(card);
   }
   expect(container.querySelector('[role="dialog"]')).toBeNull();
   expect(container.textContent).toContain("Your generated content will appear here.");
   expect(container.querySelector("#forge-creations-title")?.parentElement?.parentElement?.classList.contains("overflow-y-auto")).toBe(true);
+  act(() => cards[4].click());
+  expect(container.querySelector('[aria-label="Select source note"]')).not.toBeNull();
 });
 
 it("switches views without losing the Intelligence query or current note", async () => {
@@ -109,8 +112,8 @@ it("switches views without losing the Intelligence query or current note", async
 
 it("closes Forge and reopens the selected view through the existing sidebar toggle", async () => {
   const container = await renderSidebar();
-  act(() => container.querySelector<HTMLButtonElement>('[aria-label="Close Forge sidebar"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close Forge sidebar"]')!.click());
   expect(container.querySelector("#forge-title")).toBeNull();
-  act(() => container.querySelector<HTMLButtonElement>('[data-tooltip="Open right sidebar"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-tooltip="Open right sidebar"]')!.click());
   expect(container.querySelector("#forge-title")?.textContent).toContain("Forge");
 });

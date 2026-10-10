@@ -169,8 +169,8 @@ const electronAPI = {
   dataRead: (relativePath: string): Promise<string | null> =>
     ipcRenderer.invoke('data:read', relativePath),
 
-  dataWrite: (relativePath: string, content: string): Promise<void> =>
-    ipcRenderer.invoke('data:write', relativePath, content),
+  dataWrite: (relativePath: string, content: string, options?: { atomic: true; expectedVaultPath: string }): Promise<void> =>
+    ipcRenderer.invoke('data:write', relativePath, content, options),
 
   dataDelete: (relativePath: string): Promise<void> =>
     ipcRenderer.invoke('data:delete', relativePath),

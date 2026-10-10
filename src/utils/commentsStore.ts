@@ -4,6 +4,7 @@ import { authManager } from "../lib/auth";
 import type { NoteComment, CommentAuthor, CommentReply, QuizComment } from "../types/comments";
 import { deserializeComments, isQuizAnswerIndex, parseQuizComment, parseQuizData } from "./quiz-comments";
 import { mergeQuizCommentAnchors } from "./comment-anchors";
+import { getAPI } from "./api";
 
 const STORAGE_FILE = "comments.json";
 const LOCAL_STORAGE_PREFIX = "netherwrite:comments:";
@@ -198,36 +199,38 @@ export async function addComment(
     image?: string;
   }
 ): Promise<NoteComment> {
-  const current = await loadComments(notePath);
-  const newComment: NoteComment = {
-    id: uuidv4(),
-    notePath,
-    from: data.from,
-    to: data.to,
-    selectedText: data.selectedText,
-    content: data.content,
-    image: data.image,
-    author: getCurrentUser(),
-    createdAt: Date.now(),
-    resolved: false,
-    replies: [],
-  };
+  return enqueueCommentMutation(async () => {
+    const current = await loadComments(notePath);
+    const newComment: NoteComment = {
+      id: uuidv4(),
+      notePath,
+      from: data.from,
+      to: data.to,
+      selectedText: data.selectedText,
+      content: data.content,
+      image: data.image,
+      author: getCurrentUser(),
+      createdAt: Date.now(),
+      resolved: false,
+      replies: [],
+    };
 
-  const next = [...current, newComment];
-  await saveComments(notePath, next);
-  return newComment;
+    const next = [...current, newComment];
+    await saveComments(notePath, next);
+    return newComment;
+  });
 }
 
-// Serialize quiz mutations so rapid answers cannot overwrite one another or
-// replace the first answer while its disk write is still in flight.
-let quizMutationQueue: Promise<unknown> = Promise.resolve();
-function enqueueQuizMutation<T>(operation: () => Promise<T>): Promise<T> {
+// Serialize comment mutations so a generated quiz batch and ordinary edits
+// preserve one another, and rapid answers cannot replace a locked selection.
+let commentMutationQueue: Promise<unknown> = Promise.resolve();
+function enqueueCommentMutation<T>(operation: () => Promise<T>): Promise<T> {
   const version = vaultVersion;
-  const result = quizMutationQueue.then(() => {
-    if (version !== vaultVersion) throw new Error("The quiz's vault is no longer open");
+  const result = commentMutationQueue.then(() => {
+    if (version !== vaultVersion) throw new Error("The comment's vault is no longer open");
     return operation();
   });
-  quizMutationQueue = result.catch(() => {});
+  commentMutationQueue = result.catch(() => {});
   return result;
 }
 
@@ -237,7 +240,7 @@ export function addQuizComment(
   anchor: Pick<NoteComment, "from" | "to" | "selectedText">,
   quizData: unknown,
 ): Promise<QuizComment> {
-  return enqueueQuizMutation(async () => {
+  return enqueueCommentMutation(async () => {
     const quiz = parseQuizData(quizData);
     const comment = parseQuizComment({
       ...anchor,
@@ -251,13 +254,58 @@ export function addQuizComment(
   });
 }
 
+export interface QuizCommentDraft {
+  anchor: Pick<NoteComment, "from" | "to" | "selectedText">;
+  quiz: unknown;
+}
+
+/** Validate the entire set, then persist once before publishing any new cards. */
+export function addQuizComments(
+  notePath: string,
+  drafts: QuizCommentDraft[],
+  expectedVaultPath: string,
+  beforeSave: () => Promise<void>,
+): Promise<QuizComment[]> {
+  return enqueueCommentMutation(async () => {
+    const version = vaultVersion;
+    if (commentsVaultPath !== expectedVaultPath || drafts.length === 0) throw new Error("Invalid quiz source vault");
+    const comments = drafts.map(draft => {
+      const comment = parseQuizComment({
+        ...draft.anchor, id: uuidv4(), notePath, type: "quiz", quiz: parseQuizData(draft.quiz),
+        content: "", author: getCurrentUser(), createdAt: Date.now(), resolved: false, replies: [],
+      });
+      if (!comment || comment.from === comment.to || !comment.selectedText.trim()) throw new Error("Invalid quiz comment");
+      return comment;
+    });
+    await loadComments(notePath);
+    const raw = await getAPI().dataRead(STORAGE_FILE);
+    const persisted: unknown = raw === null ? {} : JSON.parse(raw);
+    if (!persisted || typeof persisted !== "object" || Array.isArray(persisted)) throw new Error("Invalid comments file");
+    const diskComments = persisted as Record<string, NoteComment[]>;
+    if (diskComments[notePath] !== undefined && !Array.isArray(diskComments[notePath])) throw new Error("Invalid comments file");
+    await beforeSave();
+    if (version !== vaultVersion) throw new Error("The source vault changed");
+    const next = [...(diskComments[notePath] || []), ...comments];
+    const snapshot = { ...diskComments, [notePath]: next };
+    // Unlike legacy best-effort saves, generation must observe disk failures.
+    await getAPI().dataWrite(STORAGE_FILE, JSON.stringify(snapshot), { atomic: true, expectedVaultPath });
+    if (version !== vaultVersion) throw new Error("The source vault changed");
+    allDiskComments = snapshot;
+    const visible = deserializeComments(next, notePath);
+    commentsCache.set(notePath, visible);
+    try { localStorage.setItem(localCommentsKey(notePath), JSON.stringify(next)); } catch { /* disk is authoritative */ }
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(COMMENTS_EVENT, { detail: { notePath, comments: visible } }));
+    return comments;
+  });
+}
+
 export function answerQuizQuestion(
   notePath: string,
   commentId: string,
   questionId: string,
   answerIndex: number,
 ): Promise<QuizComment | null> {
-  return enqueueQuizMutation(async () => {
+  return enqueueCommentMutation(async () => {
     if (!isQuizAnswerIndex(answerIndex)) throw new Error("Invalid quiz answer");
     const current = await loadComments(notePath);
     const comment = parseQuizComment(current.find(c => c.id === commentId));
@@ -276,7 +324,7 @@ export function answerQuizQuestion(
 export function updateQuizCommentAnchors(notePath: string, mappedComments: NoteComment[]): Promise<void> {
   const anchors = mappedComments.filter(c => c.type === "quiz" && c.notePath === notePath);
   if (anchors.length === 0) return Promise.resolve();
-  return enqueueQuizMutation(async () => {
+  return enqueueCommentMutation(async () => {
     const current = await loadComments(notePath);
     const next = mergeQuizCommentAnchors(current, anchors);
     if (next.some((comment, index) => comment !== current[index])) await saveComments(notePath, next);
@@ -290,9 +338,11 @@ export async function deleteComment(
   notePath: string,
   commentId: string
 ): Promise<void> {
-  const current = await loadComments(notePath);
-  const next = current.filter((c) => c.id !== commentId);
-  await saveComments(notePath, next);
+  return enqueueCommentMutation(async () => {
+    const current = await loadComments(notePath);
+    const next = current.filter((c) => c.id !== commentId);
+    await saveComments(notePath, next);
+  });
 }
 
 /**
@@ -304,23 +354,25 @@ export async function updateComment(
   content: string,
   image?: string
 ): Promise<NoteComment | null> {
-  const current = await loadComments(notePath);
-  let updatedComment: NoteComment | null = null;
-  const next = current.map((c) => {
-    if (c.id !== commentId) return c;
-    updatedComment = {
-      ...c,
-      content,
-      image,
-      editedAt: Date.now(),
-    };
+  return enqueueCommentMutation(async () => {
+    const current = await loadComments(notePath);
+    let updatedComment: NoteComment | null = null;
+    const next = current.map((c) => {
+      if (c.id !== commentId) return c;
+      updatedComment = {
+        ...c,
+        content,
+        image,
+        editedAt: Date.now(),
+      };
+      return updatedComment;
+    });
+
+    if (updatedComment) {
+      await saveComments(notePath, next);
+    }
     return updatedComment;
   });
-
-  if (updatedComment) {
-    await saveComments(notePath, next);
-  }
-  return updatedComment;
 }
 
 /**
@@ -330,11 +382,13 @@ export async function resolveComment(
   notePath: string,
   commentId: string
 ): Promise<void> {
-  const current = await loadComments(notePath);
-  const next = current.map((c) =>
-    c.id === commentId ? { ...c, resolved: !c.resolved } : c
-  );
-  await saveComments(notePath, next);
+  return enqueueCommentMutation(async () => {
+    const current = await loadComments(notePath);
+    const next = current.map((c) =>
+      c.id === commentId ? { ...c, resolved: !c.resolved } : c
+    );
+    await saveComments(notePath, next);
+  });
 }
 
 /**
@@ -346,31 +400,33 @@ export async function addReply(
   content: string,
   image?: string
 ): Promise<NoteComment | null> {
-  const current = await loadComments(notePath);
-  const reply: CommentReply = {
-    id: uuidv4(),
-    author: getCurrentUser(),
-    content,
-    image,
-    createdAt: Date.now(),
-  };
+  return enqueueCommentMutation(async () => {
+    const current = await loadComments(notePath);
+    const reply: CommentReply = {
+      id: uuidv4(),
+      author: getCurrentUser(),
+      content,
+      image,
+      createdAt: Date.now(),
+    };
 
-  let updatedComment: NoteComment | null = null;
-  const next = current.map((c) => {
-    if (c.id === commentId) {
-      updatedComment = {
-        ...c,
-        replies: [...(c.replies || []), reply],
-      };
-      return updatedComment;
+    let updatedComment: NoteComment | null = null;
+    const next = current.map((c) => {
+      if (c.id === commentId) {
+        updatedComment = {
+          ...c,
+          replies: [...(c.replies || []), reply],
+        };
+        return updatedComment;
+      }
+      return c;
+    });
+
+    if (updatedComment) {
+      await saveComments(notePath, next);
     }
-    return c;
+    return updatedComment;
   });
-
-  if (updatedComment) {
-    await saveComments(notePath, next);
-  }
-  return updatedComment;
 }
 
 /**

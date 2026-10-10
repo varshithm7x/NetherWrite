@@ -376,6 +376,20 @@ it("highlights only the anchored occurrence in reading mode and skips a removed 
   expect(applyCommentHighlightsToHtml(`<p>${edited}</p>`, edited, unavailable)).toBe(`<p>${edited}</p>`);
 });
 
+it("highlights generated quiz excerpts across paragraphs and CRLF files without changing ordinary highlights", async () => {
+  const content = "# Topic\n\nFirst **supporting sentence**.\n\nSecond supporting sentence.";
+  const selectedText = "First **supporting sentence**.\n\nSecond supporting sentence.";
+  const from = content.indexOf("First");
+  const comment = await store.addQuizComment(notePath, { from, to: content.length, selectedText }, quizData());
+  const raw = content.replace(/\n/g, "\r\n");
+  const anchored = normalizeCommentAnchors([comment], raw);
+  expect(anchored[0].to).toBe(content.length);
+  const html = "<h1>Topic</h1>\n<p>First <strong>supporting sentence</strong>.</p>\n<p>Second supporting sentence.</p>";
+  const highlighted = applyCommentHighlightsToHtml(html, raw, anchored);
+  expect(highlighted.match(/data-comment-id=/g)?.length).toBeGreaterThan(1);
+  expect(highlighted).toContain("<strong>");
+});
+
 it("renders saved quiz replies through the existing comment thread", async () => {
   const { container, comment } = await mountQuiz();
   await act(async () => { await store.addReply(notePath, comment.id, "Discuss this question"); });

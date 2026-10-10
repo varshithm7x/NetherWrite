@@ -1,9 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AI_PROVIDER_PRESETS,
   DEFAULT_MODEL_ID,
   getModelsForProvider,
   loadSettings,
+  loadSettingsAsync,
+  AI_SETTINGS_CHANGED_EVENT,
   saveSettings,
   type AISettings,
 } from "../../../utils/ai-settings";
@@ -16,17 +18,22 @@ export function AIIntelligenceDashboard() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const indexedCount = store.entries.size;
 
+  useEffect(() => {
+    const update = () => setAiSettings(loadSettings());
+    window.addEventListener(AI_SETTINGS_CHANGED_EVENT, update);
+    void loadSettingsAsync();
+    return () => window.removeEventListener(AI_SETTINGS_CHANGED_EVENT, update);
+  }, []);
+
   const models = getModelsForProvider(aiSettings.provider);
   const matchedModel = models.find((m) => m.id === aiSettings.modelId);
   const isCustomModel = !matchedModel && aiSettings.provider === "openrouter";
   const customModelValue = isCustomModel ? aiSettings.modelId : aiSettings.customModelId || "";
 
   const updateAISettings = (patch: Partial<AISettings>) => {
-    setAiSettings((prev) => {
-      const next = { ...prev, ...patch };
-      saveSettings(next);
-      return next;
-    });
+    const next = { ...aiSettings, ...patch };
+    saveSettings(next);
+    setAiSettings(next);
   };
 
   const activeProvider = AI_PROVIDER_PRESETS.find((p) => p.id === aiSettings.provider) || AI_PROVIDER_PRESETS[0];
@@ -53,7 +60,7 @@ export function AIIntelligenceDashboard() {
           <div className="text-right">
             <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">Status</span>
             <div className="mt-1 text-xs font-bold text-[var(--text-primary)]">
-              {aiSettings.apiKey ? "Connected" : "Key Needed"}
+              {aiSettings.apiKey.trim() ? "Key Saved" : "Key Needed"}
             </div>
           </div>
         </div>
@@ -72,12 +79,14 @@ export function AIIntelligenceDashboard() {
                 key={preset.id}
                 type="button"
                 onClick={() => {
+                  if (isSelected) return;
                   const nextKey = aiSettings.providerKeys?.[preset.id] || "";
                   const nextModels = getModelsForProvider(preset.id);
                   updateAISettings({
                     provider: preset.id,
                     apiKey: nextKey,
                     modelId: nextModels[0]?.id || DEFAULT_MODEL_ID,
+                    customBaseUrl: "",
                     providerKeys: { ...aiSettings.providerKeys, [aiSettings.provider]: aiSettings.apiKey },
                   });
                 }}
@@ -122,7 +131,7 @@ export function AIIntelligenceDashboard() {
         <input
           type="password"
           value={aiSettings.apiKey}
-          onChange={(e) => updateAISettings({ apiKey: e.target.value })}
+          onChange={(e) => updateAISettings({ apiKey: e.target.value, providerKeys: { ...aiSettings.providerKeys, [aiSettings.provider]: e.target.value } })}
           placeholder={activeProvider.keyPlaceholder}
           className="h-8 w-64 rounded-lg border border-[var(--border-medium)] bg-[var(--bg-tertiary)] px-3 text-xs font-mono text-[var(--text-primary)] outline-none"
         />

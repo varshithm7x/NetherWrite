@@ -7,12 +7,14 @@
  *  1. Auto-annotation: 1-line per note (generated once, cached)
  *  2. Synthesis across multiple notes (on user request)
  *  3. RAG query answering (on user request)
+ *  4. Forge quiz generation (on user request, validated before comments are saved)
  *
  * LLM does NOT: auto-modify notes, auto-create links, replace user thinking.
  * All outputs are cached. The system works fully without an API key.
  */
 
-import { loadAIConfig, getBaseUrl, getProviderHeaders, parseProviderError } from "./ai-settings";
+import { loadAIConfig, getBaseUrl, getProviderHeaders, readProviderError } from "./ai-settings";
+import type { AIProviderFailure } from "./ai-settings";
 import { readData, writeData, createDebouncedWriter } from "./disk-store";
 import { MERMAID_FORMATTING_RULES } from "./spaces-rag";
 
@@ -92,20 +94,29 @@ function simpleHash(text: string): string {
 
 // ── LLM call helper ─────────────────────────────────────────────────────────
 
+export class AIProviderRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly kind: AIProviderFailure["kind"] = "other") {
+    super(message);
+    this.name = "AIProviderRequestError";
+  }
+}
+
 async function callLLM(
   systemPrompt: string,
   userPrompt: string,
   maxTokens = 300,
   temperature = 0.2,
+  signal?: AbortSignal,
 ): Promise<string> {
   const config = loadAIConfig();
   if (!config) throw new Error("No API key configured.");
 
   const baseUrl = getBaseUrl(config);
+  const reasoningModel = config.provider === "openai" && /^o\d(?:-|$)/.test(config.modelId);
   const requestBody = JSON.stringify({
     model: config.modelId,
-    max_tokens: maxTokens,
-    temperature,
+    ...(config.provider === "openai" ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
+    ...(!reasoningModel ? { temperature } : {}),
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -120,10 +131,12 @@ async function callLLM(
       method: "POST",
       headers: getProviderHeaders(config),
       body: requestBody,
+      signal,
     });
 
     if (!response.ok) {
-      throw new Error(await parseProviderError(response));
+      const failure = await readProviderError(response);
+      throw new AIProviderRequestError(failure.message, failure.status, failure.kind);
     }
 
     const data = await response.json();
@@ -140,8 +153,9 @@ export async function askAI(
   userPrompt: string,
   maxTokens = 600,
   temperature = 0.3,
+  signal?: AbortSignal,
 ): Promise<string> {
-  return callLLM(systemPrompt, userPrompt, maxTokens, temperature);
+  return callLLM(systemPrompt, userPrompt, maxTokens, temperature, signal);
 }
 
 

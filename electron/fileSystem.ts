@@ -478,7 +478,8 @@ export class FileSystemManager {
   }
 
   /** Write a JSON file to .netherwrite/ */
-  async writeDataFile(relativePath: string, content: string): Promise<void> {
+  async writeDataFile(relativePath: string, content: string, options?: { atomic: true; expectedVaultPath: string }): Promise<void> {
+    if (options && this.vaultPath !== options.expectedVaultPath) throw new Error('The source vault changed');
     const dir = this.ensureDataDir();
     const filePath = path.join(dir, relativePath);
     if (filePath !== dir && !filePath.startsWith(dir + path.sep)) throw new Error('Path traversal detected');
@@ -486,7 +487,18 @@ export class FileSystemManager {
     if (!fs.existsSync(fileDir)) {
       fs.mkdirSync(fileDir, { recursive: true });
     }
-    await fs.promises.writeFile(filePath, content, 'utf-8');
+    if (!options) {
+      await fs.promises.writeFile(filePath, content, 'utf-8');
+      return;
+    }
+    const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.promises.writeFile(temporaryPath, content, { encoding: 'utf-8', flag: 'wx' });
+      if (this.vaultPath !== options.expectedVaultPath) throw new Error('The source vault changed');
+      await fs.promises.rename(temporaryPath, filePath);
+    } finally {
+      await fs.promises.unlink(temporaryPath).catch(() => {});
+    }
   }
 
   /** Delete a file from .netherwrite/ */

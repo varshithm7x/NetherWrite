@@ -9,6 +9,11 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/** CodeMirror uses LF source coordinates even when a file has CRLF endings. */
+export function normalizeCommentSource(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
 /** Convert the common inline Markdown forms into the text visible in reading mode. */
 export function getCommentDisplayText(value: string): string {
   return value
@@ -99,9 +104,10 @@ export function normalizeCommentAnchors(comments: NoteComment[], source: string)
     // Quiz ranges are mapped and saved on edits. Never search for another
     // occurrence of a removed passage; leave its card at its last position.
     if (comment.type === "quiz") {
-      const from = Math.max(0, Math.min(comment.from, source.length));
-      const to = Math.max(from, Math.min(comment.to, source.length));
-      const matches = from < to && normalizeText(getCommentDisplayText(source.slice(from, to)))
+      const quizSource = normalizeCommentSource(source);
+      const from = Math.max(0, Math.min(comment.from, quizSource.length));
+      const to = Math.max(from, Math.min(comment.to, quizSource.length));
+      const matches = from < to && normalizeText(getCommentDisplayText(quizSource.slice(from, to)))
         === normalizeText(getCommentDisplayText(comment.selectedText));
       return matches ? comment : { ...comment, from, to: from };
     }

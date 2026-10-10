@@ -69,6 +69,7 @@ interface RightSidebarProps {
   theme?: Theme;
   fileTree?: FileEntry[];
   onClose?: () => void;
+  readNoteContent?: (path: string) => Promise<string>;
   rightPluginViews?: Array<{
     viewType: string;
     displayText: string;
@@ -95,6 +96,7 @@ export function RightSidebar({
   theme,
   fileTree = [],
   onClose,
+  readNoteContent,
   rightPluginViews = [],
   onClosePluginView,
 }: RightSidebarProps) {
@@ -182,7 +184,10 @@ export function RightSidebar({
 
         {activeTab === "forge" && (
           <div className="right-sidebar-view h-full">
-            <ForgePanel onClose={onClose} />
+            <ForgePanel onClose={onClose} vaultPath={vaultPath}
+              activeNote={activeFilePath ? { name: activeFileName, path: activeFilePath } : null}
+              notes={allNoteNames.filter(note => /\.md$/i.test(note.path))}
+              readNoteContent={readNoteContent} onOpenNote={path => openFile(path)} />
           </div>
         )}
 

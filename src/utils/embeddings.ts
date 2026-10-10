@@ -13,6 +13,7 @@
  */
 
 import { readData, writeData, listData, deleteData, createDebouncedWriter } from "./disk-store";
+import { waitForForegroundGeneration } from "./background-priority";
 
 type FeatureExtractionPipeline = any;
 
@@ -494,13 +495,17 @@ const yieldToRenderer = (): Promise<void> => new Promise((resolve) => setTimeout
 
 /** Embed several note chunks per model call, yielding between batches so the
  * renderer remains responsive while a large vault is being indexed. */
-async function embedCleanChunks(cleanChunks: string[]): Promise<number[][]> {
+async function embedCleanChunks(cleanChunks: string[], background = false, isCurrent: () => boolean = () => true): Promise<number[][]> {
   if (cleanChunks.length === 0) return [];
+  if (background) await waitForForegroundGeneration();
+  if (!isCurrent()) throw new Error("Note analysis context changed");
   if (_disabledReason) return cleanChunks.map((chunk) => lexicalEmbedText(chunk));
 
   const vectors: number[][] = [];
   const batchSize = 8;
   for (let start = 0; start < cleanChunks.length; start += batchSize) {
+    if (background) await waitForForegroundGeneration();
+    if (!isCurrent()) throw new Error("Note analysis context changed");
     const batch = cleanChunks.slice(start, start + batchSize);
     try {
       const embedder = await getEmbedder();
@@ -511,6 +516,7 @@ async function embedCleanChunks(cleanChunks: string[]): Promise<number[][]> {
         vectors.push(data.slice(index * EMBEDDING_DIM, (index + 1) * EMBEDDING_DIM));
       }
     } catch {
+      if (!isCurrent()) throw new Error("Note analysis context changed");
       // Keep a partial model failure useful instead of discarding the whole
       // note. Individual fallback calls preserve the existing lexical path.
       for (const chunk of batch) vectors.push(await embedCleanChunk(chunk));
@@ -522,13 +528,15 @@ async function embedCleanChunks(cleanChunks: string[]): Promise<number[][]> {
 
 async function embedTextWithSegments(
   text: string | null | undefined,
+  background = false,
+  isCurrent?: () => boolean,
 ): Promise<{ vector: number[]; segmentVectors: number[][] }> {
   const chunks = chunkTextForEmbedding(text);
   if (chunks.length === 0) {
     return { vector: new Array(EMBEDDING_DIM).fill(0), segmentVectors: [] };
   }
 
-  const chunkVectors = await embedCleanChunks(chunks);
+  const chunkVectors = await embedCleanChunks(chunks, background, isCurrent);
 
   return {
     vector: averageVectors(chunkVectors),
@@ -732,6 +740,7 @@ export async function embedNote(
   content: string | null | undefined,
   modifiedAt?: number,
   size?: number,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   const source = typeof content === "string" ? content : "";
   const hash = simpleHash(source);
@@ -742,7 +751,10 @@ export async function embedNote(
     if (cleanLength < 5 || hasVectorSignal(existing.vector)) return false;
   }
 
-  const { vector, segmentVectors } = await embedTextWithSegments(source);
+  const vaultPath = typeof window === "undefined" ? undefined : (window as any).__oo_vault_path;
+  const current = () => (!isCurrent || isCurrent()) && (typeof window === "undefined" || (window as any).__oo_vault_path === vaultPath);
+  const { vector, segmentVectors } = await embedTextWithSegments(source, true, current);
+  if (!current()) throw new Error("Note analysis context changed");
   const entry: StoredEmbedding = {
     path,
     hash,

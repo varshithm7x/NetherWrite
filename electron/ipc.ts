@@ -473,8 +473,11 @@ export function registerIpcHandlers(
     return fsManager.readDataFile(relativePath);
   });
 
-  ipcMain.handle('data:write', async (_event, relativePath: string, content: string) => {
-    await fsManager.writeDataFile(relativePath, content);
+  ipcMain.handle('data:write', async (_event, relativePath: string, content: string, options?: { atomic: true; expectedVaultPath: string }) => {
+    if (options && (!['comments.json', 'forge-flashcards.json'].includes(relativePath) || options.atomic !== true || typeof options.expectedVaultPath !== 'string')) {
+      throw new Error('Invalid quiz comment write options');
+    }
+    await fsManager.writeDataFile(relativePath, content, options);
   });
 
   ipcMain.handle('data:delete', async (_event, relativePath: string) => {

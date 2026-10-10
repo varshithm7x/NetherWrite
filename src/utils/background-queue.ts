@@ -23,6 +23,7 @@ import {
 } from "./embeddings";
 import { getAnnotation } from "./ai-core";
 import { readData, writeData } from "./disk-store";
+import { waitForForegroundGeneration } from "./background-priority";
 
 // ── Job types ────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ let _processedCount = 0;
 let _totalCount = 0;
 let _onStatusChange: ((status: QueueStatus) => void) | null = null;
 let _queueLoaded = false;
+let _queueVersion = 0;
 
 export interface QueueStatus {
   isRunning: boolean;
@@ -137,9 +139,11 @@ async function persistQueue(): Promise<void> {
  */
 async function loadPersistedQueue(): Promise<void> {
   if (_queueLoaded) return;
+  const version = _queueVersion;
   _queueLoaded = true;
 
   const state = await readData<PersistedQueue>("queue.json");
+  if (version !== _queueVersion) return;
   if (!state || !state.jobs || state.jobs.length === 0) return;
 
   // Only restore if the queue was saved recently (< 24h)
@@ -202,6 +206,7 @@ const BATCH_SIZE = 3;
 const BATCH_DELAY_MS = 100;
 
 async function processBatch(api: any): Promise<boolean> {
+  const version = _queueVersion;
   if (!areEmbeddingsAvailable()) {
     _queue = [];
     _isProcessing = false;
@@ -214,15 +219,20 @@ async function processBatch(api: any): Promise<boolean> {
   if (batch.length === 0) return true;
 
   const store = await loadStoreAsync();
+  if (version !== _queueVersion) return false;
 
   for (const job of batch) {
+    await waitForForegroundGeneration();
+    if (version !== _queueVersion) return false;
     try {
       // Load content on demand if empty (from persisted queue)
       let content = job.content;
       if (!content && api?.readFile) {
         try {
           content = await api.readFile(job.path);
+          if (version !== _queueVersion) return false;
         } catch {
+          if (version !== _queueVersion) return false;
           _processedCount++;
           reportStatus();
           continue;
@@ -236,13 +246,15 @@ async function processBatch(api: any): Promise<boolean> {
       }
 
       if (job.type === "embed") {
-        await embedNote(store, job.path, content, job.modifiedAt, job.size);
+        await embedNote(store, job.path, content, job.modifiedAt, job.size, () => version === _queueVersion);
       } else if (job.type === "annotate") {
         await getAnnotation(job.path, content);
       }
     } catch (err) {
+      if (version !== _queueVersion) return false;
       console.warn(`[Queue] Failed ${job.type} for ${job.path}:`, err);
     }
+    if (version !== _queueVersion) return false;
     _processedCount++;
     reportStatus();
   }
@@ -258,15 +270,18 @@ async function processBatch(api: any): Promise<boolean> {
 export async function startProcessing(api?: any): Promise<void> {
   if (_isProcessing) return;
   if (_queue.length === 0) return;
+  const version = _queueVersion;
 
   _isProcessing = true;
   reportStatus("Analyzing your notes...");
 
   while (_queue.length > 0) {
+    if (version !== _queueVersion) return;
     const canContinue = await processBatch(api);
     if (!canContinue) return;
     await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
   }
+  if (version !== _queueVersion) return;
 
   _isProcessing = false;
   _processedCount = 0;
@@ -284,6 +299,7 @@ export async function startProcessing(api?: any): Promise<void> {
 }
 
 export function cancelProcessing(): void {
+  _queueVersion++;
   _queue = [];
   _isProcessing = false;
   _processedCount = 0;
@@ -293,6 +309,7 @@ export function cancelProcessing(): void {
 }
 
 export function resetQueueState(): void {
+  _queueVersion++;
   _queue = [];
   _isProcessing = false;
   _processedCount = 0;
@@ -327,6 +344,7 @@ export async function initializeVault(
   recentPaths: string[] = [],
   api?: any,
 ): Promise<{ enqueued: number; alreadyIndexed: number }> {
+  const version = _queueVersion;
   if (!areEmbeddingsAvailable()) {
     _isProcessing = false;
     _processedCount = 0;
@@ -337,11 +355,13 @@ export async function initializeVault(
 
   // Load any persisted queue state first
   await loadPersistedQueue();
+  if (version !== _queueVersion) return { enqueued: 0, alreadyIndexed: 0 };
 
   // CRITICAL: await disk-loaded embeddings so we can skip notes that
   // already have cached embeddings. Without this, the in-memory Map is
   // empty and every note looks "new", causing full re-analysis.
   const store = await loadStoreAsync();
+  if (version !== _queueVersion) return { enqueued: 0, alreadyIndexed: 0 };
 
   // Prune any stored embeddings for notes that have been deleted from the vault
   const validNotePaths = new Set(allNotes.map((n) => n.path));
@@ -351,10 +371,14 @@ export async function initializeVault(
   let alreadyIndexed = 0;
   const recentSet = new Set(recentPaths);
   const now = Date.now();
+  const pendingJobs: BackgroundJob[] = [];
 
   _processedCount = 0;
 
-  for (const note of allNotes) {
+  for (let index = 0; index < allNotes.length; index++) {
+    if (index > 0 && index % 64 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+    if (version !== _queueVersion) return { enqueued: 0, alreadyIndexed: 0 };
+    const note = allNotes[index];
     const existing = store.entries.get(note.path);
     const hasStoredSignal = existing?.vector?.some((value) => Math.abs(value) > 1e-8);
     const isUnchanged = existing &&
@@ -370,6 +394,7 @@ export async function initializeVault(
     if (existing && api?.readFile) {
       try {
         const content = await api.readFile(note.path);
+        if (version !== _queueVersion) return { enqueued: 0, alreadyIndexed: 0 };
         if (
           typeof content === "string" &&
           refreshEmbeddingMetadataIfUnchanged(store, note.path, content, note.modifiedAt, note.size)
@@ -386,7 +411,7 @@ export async function initializeVault(
     if (note.path === activeNotePath) priority = 0;
     else if (recentSet.has(note.path)) priority = 1;
 
-    enqueueJob({
+    pendingJobs.push({
       id: `embed-${note.path}`,
       type: "embed",
       path: note.path,
@@ -399,11 +424,24 @@ export async function initializeVault(
     enqueued++;
   }
 
+  // Merge and sort once instead of scanning and re-sorting the growing queue
+  // for every note. Large vaults must leave time for clicks and generation.
+  const queued = new Map(_queue.map(job => [JSON.stringify([job.type, job.path]), job]));
+  for (const job of pendingJobs) {
+    const key = JSON.stringify([job.type, job.path]);
+    const existing = queued.get(key);
+    if (existing) {
+      if (job.priority < existing.priority) { existing.priority = job.priority; existing.content = job.content; }
+    } else { _queue.push(job); queued.set(key, job); }
+  }
+  sortQueue();
+
   _totalCount = enqueued;
 
   if (enqueued > 0) {
     // Persist queue before starting
     await persistQueue();
+    if (version !== _queueVersion) return { enqueued: 0, alreadyIndexed: 0 };
     startProcessing(api);
   }
 
