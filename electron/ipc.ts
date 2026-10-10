@@ -365,6 +365,12 @@ export function registerIpcHandlers(
     await fsManager.writeBinary(filePath, content);
   });
 
+  ipcMain.handle('fs:importResource', async (_event, vaultPath: string, originalPath: string, bytes: Uint8Array, notePath: string | null, content: string) => {
+    await fsManager.importResource(vaultPath, originalPath, bytes, notePath, content);
+    searchEngine.buildIndex(fsManager).catch(console.error);
+    scheduleWatcherRescan();
+  });
+
   ipcMain.handle('fs:createFile', async (_event, filePath: string, content?: string) => {
     await fsManager.createFile(filePath, content || '');
     searchEngine.buildIndex(fsManager).catch(console.error);

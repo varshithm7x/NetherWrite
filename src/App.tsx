@@ -58,7 +58,6 @@ const TemplateModal = React.lazy(() => import("./components/modals/TemplateModal
 const SpacesPage = React.lazy(() => import("./components/spaces/SpacesPage").then((m) => ({ default: m.SpacesPage })));
 const DatabaseView = React.lazy(() => import("./components/settings/DatabaseView").then((m) => ({ default: m.DatabaseView })));
 import {
-  embedNote,
   loadStore,
   removeEmbedding,
   renameEmbeddingPath,
@@ -77,7 +76,7 @@ import {
   type EmbeddingStore,
 } from "./utils/embeddings";
 import { getAnnotation, getCachedAnnotation, generateFirstThoughtExpansion } from "./utils/ai-core";
-import { initializeVault, setQueueStatusCallback, resetQueueState, type QueueStatus } from "./utils/background-queue";
+import { initializeVault, enqueueJob, startProcessing, setQueueStatusCallback, resetQueueState, type QueueStatus } from "./utils/background-queue";
 import { type LinkType } from "./components/ai/SuggestionBanner";
 import { enrichSuggestions, type EnrichedSuggestion } from "./utils/suggestion-enrichment";
 import { resetSynthesisCache } from "./utils/synthesis";
@@ -2519,50 +2518,11 @@ export default function App() {
     if (path.startsWith(".trash/") || path.startsWith(".netherwrite/")) return;
     if (!areEmbeddingsAvailable()) return;
 
-    const noteLabel = path.split("/").pop()?.replace(/\.md$/i, "") || path;
-    setQueueStatus({
-      isRunning: true,
-      processed: 0,
-      total: 1,
-      progress: 5,
-      message: `Indexing ${noteLabel}…`,
+    enqueueJob({
+      id: `embed:${path}`, type: "embed", path, content: content ?? "",
+      priority: 0, enqueuedAt: Date.now(),
     });
-    try {
-      const source = typeof content === "string" ? content : (await api.readFile(path)) || "";
-      const store = loadStore();
-      const changed = await embedNote(store, path, source);
-      if (changed) {
-        window.dispatchEvent(
-          new CustomEvent("netherwrite:embedding-updated", {
-            detail: { path },
-          }),
-        );
-      }
-      const completedMessage = `Indexed ${noteLabel}`;
-      setQueueStatus({
-        isRunning: false,
-        processed: 1,
-        total: 1,
-        progress: 100,
-        message: completedMessage,
-      });
-      window.setTimeout(() => {
-        setQueueStatus((current) => current?.message === completedMessage ? null : current);
-      }, 3000);
-    } catch (err) {
-      console.warn("[Auto-index] Failed:", err);
-      const failedMessage = `Indexing failed for ${noteLabel}`;
-      setQueueStatus({
-        isRunning: false,
-        processed: 0,
-        total: 1,
-        progress: 0,
-        message: failedMessage,
-      });
-      window.setTimeout(() => {
-        setQueueStatus((current) => current?.message === failedMessage ? null : current);
-      }, 3000);
-    }
+    void startProcessing(api);
   }, []);
 
   useEffect(() => {
@@ -3307,8 +3267,7 @@ export default function App() {
     setShownFirstThoughtExpansionDraftKey(null);
     setDismissedFirstThoughtExpansionDraftKey(null);
 
-    const store = loadStore();
-    void embedNote(store, candidatePath, content);
+    void indexMarkdownFileNow(candidatePath, content);
     void getAnnotation(candidatePath, content)
       .then((annotation) => {
         if (annotation) {
@@ -3318,7 +3277,7 @@ export default function App() {
       .catch(() => {
         // ignore annotation failures in FTUX entry
       });
-  }, [firstThoughtDraft, refreshFileTree, vaultPath, openFile]);
+  }, [firstThoughtDraft, refreshFileTree, vaultPath, openFile, indexMarkdownFileNow]);
 
   const handleToggleCanvas = async () => {
     const path = await createCanvasDocumentWithPrompt("Untitled canvas");

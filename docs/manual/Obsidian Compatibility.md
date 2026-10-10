@@ -36,3 +36,5 @@ Back up vault → open the same folder → inspect a few notes and links → tes
 - [Plugins](<Plugins.md>)
 - [Markdown](<Markdown.md>)
 
+
+[[Open a Vault]]

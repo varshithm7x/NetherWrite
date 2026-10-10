@@ -42,6 +42,41 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   dataRead.mockResolvedValue(null);
+  readFile.mockResolvedValue("Saved source");
+});
+
+it("uses the active PDF's extracted note for Intelligence, quizzes, and mind maps", async () => {
+  const pdf = "Uploads/import/Lecture.pdf", contentPath = "Uploads/import/Lecture.content.md";
+  const pdfText = "## Page 1\n\nBinary search halves the search interval.";
+  readFile.mockResolvedValue(pdfText);
+  const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const open = vi.fn();
+  const props = {
+    currentContent: "", allNoteNames: [{ name: "Lecture.content", path: contentPath }],
+    handleLinkClick: vi.fn(), backlinks: [], openFile: open, activeFilePath: pdf, activeFileName: "Lecture.pdf",
+    width: 300, vaultPath: "/vault", theme: "dark" as const,
+  };
+  await act(async () => root.render(React.createElement(RightSidebar, { ...props, activeTab: "ai" })));
+  expect(container.querySelector('[aria-label="Intelligence query"]')?.getAttribute("data-note")).toBe(contentPath);
+  await act(async () => root.render(React.createElement(RightSidebar, { ...props, activeTab: "forge" })));
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Quizzes"]')!.click());
+  expect(container.textContent).toContain("Lecture.pdf");
+  expect(container.textContent).toContain(contentPath);
+  expect([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Generate Quiz")?.disabled).toBe(false);
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Creation tools"))!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Create Mind Map"]')!.click());
+  const topic = container.querySelector<HTMLInputElement>('input:not([type])')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(topic, "Binary search");
+    topic.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const creation = { id: "pdf-map", createdAt: 1, sources: [{ path: contentPath, name: "Lecture.pdf" }], root: { id: "root", label: "Binary search", sourcePaths: [contentPath], children: [] } };
+  generateMindMap.mockResolvedValue(creation);
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Generate mind map")!.click());
+  expect(generateMindMap).toHaveBeenCalledWith([{ path: contentPath, name: "Lecture.pdf", content: pdfText }], expect.any(Function), "Binary search");
+  await act(async () => container.querySelector('[role="button"][aria-label="Binary search"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  expect(open).toHaveBeenCalledWith(pdf);
+  expect(readFile.mock.calls.every(([path]) => path !== pdf)).toBe(true);
 });
 
 function SidebarHarness({ theme, width }: { theme: Theme; width: number }) {
@@ -81,14 +116,13 @@ async function renderSidebar(theme: Theme = "dark", width = 300) {
   return container;
 }
 
-it.each(["light", "dark"] as const)("renders Quizzes, Flashcards and three coming-soon cards under the %s theme at narrow width", async theme => {
+it.each(["light", "dark"] as const)("renders the four remaining Forge tools under the %s theme at narrow width", async theme => {
 
   const container = await renderSidebar(theme, 200);
   const grid = container.querySelector('[aria-label="Creation tools"]')!;
   const cards = [...grid.querySelectorAll<HTMLButtonElement>("button")];
   expect(cards.map(card => card.getAttribute("aria-label"))).toEqual([
-    "Slides — Coming Soon", "Create Mind Map", "Reports — Coming Soon",
-    "Flashcards", "Quizzes", "Infographics — Coming Soon",
+    "Create Mind Map", "Reports — Coming Soon", "Flashcards", "Quizzes",
 
   ]);
   expect(grid.classList.contains("grid-cols-2")).toBe(true);
@@ -103,7 +137,7 @@ it.each(["light", "dark"] as const)("renders Quizzes, Flashcards and three comin
   expect(container.querySelector('[role="dialog"]')).toBeNull();
   expect(container.textContent).toContain("Your generated content will appear here.");
   expect(container.querySelector("#forge-creations-title")?.parentElement?.parentElement?.classList.contains("overflow-y-auto")).toBe(true);
-  act(() => cards[4].click());
+  act(() => cards.find(card => card.getAttribute("aria-label") === "Quizzes")!.click());
   expect(container.querySelector('[aria-label="Select source note"]')).not.toBeNull();
 });
 
@@ -111,7 +145,8 @@ it("creates from the current editor content, saves locally, and expands branches
   const creation = { id: "map-1", createdAt: 1, sources: [{ path: "current.md", name: "Current" }], root: {
     id: "root", label: "Knowledge", children: [{ id: "root.0", label: "Basics", children: [{ id: "root.0.0", label: "Details", children: [] }] }],
   } };
-  generateMindMap.mockResolvedValue(creation);
+  let finish!: (value: typeof creation) => void;
+  generateMindMap.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -129,6 +164,9 @@ it("creates from the current editor content, saves locally, and expands branches
     topic.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => generate.click());
+  expect(container.querySelector('[data-electric-active="true"]')).not.toBeNull();
+  await act(async () => finish(creation));
+  expect(container.querySelector('[data-electric-active="true"]')).toBeNull();
   expect(generateMindMap).toHaveBeenCalledWith([{ path: "current.md", name: "Current", content: "Unsaved editor content" }], expect.any(Function), "Image processing");
   expect(dataWrite).toHaveBeenCalledWith("forge-mind-maps.json", JSON.stringify([creation]));
   expect(document.querySelector('[aria-label="Interactive mind map"]')?.textContent).not.toContain("Details");
@@ -171,6 +209,28 @@ it("opens the topic's cited note without closing Forge or expanding its branch",
   act(() => container.querySelector('[role="button"][aria-label="Data types"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   expect(openSource).toHaveBeenLastCalledWith("matlab.md");
   expect(generateMindMap).not.toHaveBeenCalled();
+});
+
+it("stops the mind map border immediately and retains the error when generation fails", async () => {
+  let fail!: (error: Error) => void;
+  generateMindMap.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root.render(React.createElement(ForgePanel, {
+    vaultPath: "/vault", activeFilePath: "current.md", activeFileName: "Current", currentContent: "Source content",
+  })));
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Create Mind Map"]')!.click());
+  const topic = container.querySelector<HTMLInputElement>('input:not([type])')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(topic, "Processing");
+    topic.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Generate mind map")!.click());
+  expect(container.querySelector('[data-electric-active="true"]')).not.toBeNull();
+  await act(async () => fail(new Error("Generation failed")));
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="false"]')).not.toBeNull();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Generation failed");
 });
 
 it("switches views without losing the Intelligence query or current note", async () => {

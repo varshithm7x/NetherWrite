@@ -50,7 +50,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['d3-force', 'd3', 'mermaid', 'react-colorful'],
+    // Lazy model/document imports must be ready before the first indexing/upload
+    // request; discovering them later makes Vite reload the active renderer.
+    include: ['d3-force', 'd3', 'mermaid', 'react-colorful', '@xenova/transformers', 'onnxruntime-web', 'pdfjs-dist/legacy/build/pdf.mjs', 'mammoth/mammoth.browser.js', 'xlsx', 'docx-preview', '@aiden0z/pptx-renderer'],
   },
   worker: {
     format: 'es',
@@ -58,6 +60,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      // Vault changes belong to Electron's file watcher, not application HMR.
+      ignored: ['**/.netherwrite/**', '**/.obsidian/**', '**/Uploads/**', '**/OO-Test-Vault/**', '**/computer-science-notes/**', '**/*.onnx', '**/*.canvas'],
+    },
   },
   test: {
     include: ["tests/**/*.test.ts"],

@@ -9,6 +9,7 @@ import { ForgePanel } from "../src/components/panels/ForgePanel";
 import { saveFlashcardDeck } from "../src/utils/flashcardsStore";
 import type { ForgeSourceContext } from "../src/utils/forge-note-source";
 import type { FlashcardDeck } from "../src/types/flashcards";
+import { ForgeGenerationBoundary } from "../src/components/panels/ForgeGenerationBoundary";
 
 const mocks = vi.hoisted(() => ({
   vault: "/fixture-vault", ask: vi.fn(), exists: vi.fn(), readNote: vi.fn(), disk: new Map<string, string>(), write: vi.fn(),
@@ -57,7 +58,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root?.unmount()); root = null; document.body.replaceChildren(); });
 async function renderForm(patch: Partial<typeof props> = {}) {
   props = { ...props, ...patch };
-  await act(async () => root!.render(React.createElement(ForgeFlashcardForm, props)));
+  await act(async () => root!.render(React.createElement(ForgeGenerationBoundary, null, React.createElement(ForgeFlashcardForm, props))));
 }
 async function renderStudy(data = deck(), onOpenNote = props.onOpenNote) {
   await act(async () => root!.render(React.createElement(FlashcardStudy, { deck: data, onBack: props.onBack, onOpenNote })));
@@ -143,6 +144,7 @@ it("prevents duplicate submissions and cancels safely on unmount", async () => {
   expect(mocks.ask).toHaveBeenCalledOnce();
   expect(container.textContent).toContain("Generating…");
   expect(container.textContent).toContain("Generating flashcards…");
+  expect(container.querySelector('[data-electric-active="true"]')).not.toBeNull();
   const signal: AbortSignal = mocks.ask.mock.calls[0][4];
   act(() => root!.unmount()); root = null;
   expect(signal.aborted).toBe(true);
@@ -274,6 +276,7 @@ it("rejects an edited source while generation is pending", async () => {
   await renderForm({ readNoteContent: async () => `${passage} Edited during generation.` });
   await act(async () => resolve(JSON.stringify({ cards: [{ front: "Question?", back: "Answer.", sourceExcerpt: passage }] })));
   expect(container.textContent).toContain("source note changed during generation");
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="false"]')).not.toBeNull();
   expect(props.onCreated).not.toHaveBeenCalled();
   expect(mocks.write).not.toHaveBeenCalled();
 });

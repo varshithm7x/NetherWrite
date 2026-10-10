@@ -6,6 +6,7 @@ import { ForgeQuizForm } from "../src/components/panels/ForgeQuizForm";
 import type { ForgeQuizContext } from "../src/components/panels/ForgeQuizForm";
 import type { QuizGenerationRequest, QuizGenerationResult } from "../src/utils/quiz-generation";
 import { QuizGenerationError } from "../src/utils/quiz-generation";
+import { ForgeGenerationBoundary } from "../src/components/panels/ForgeGenerationBoundary";
 
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), exists: vi.fn(), read: vi.fn(), getVault: vi.fn() }));
 vi.mock("../src/utils/quiz-generation", async importOriginal => {
@@ -53,7 +54,7 @@ afterEach(() => {
 
 async function render(patch: Partial<typeof props> = {}) {
   props = { ...props, ...patch };
-  await act(async () => root!.render(React.createElement(ForgeQuizForm, props)));
+  await act(async () => root!.render(React.createElement(ForgeGenerationBoundary, null, React.createElement(ForgeQuizForm, props))));
 }
 function input(label: string): HTMLInputElement { return container.querySelector(`[aria-label="${label}"]`)!; }
 async function type(label: string, text: string) {
@@ -132,6 +133,11 @@ it("prevents duplicate submissions and keeps the original source during a note s
   });
   expect(mocks.generate).toHaveBeenCalledOnce();
   expect(container.textContent).toContain("Generating…");
+  expect(container.querySelector('[data-electric-active="true"]')).not.toBeNull();
+  const beam = container.querySelector('[data-electric-active="true"]')!;
+  expect(beam.querySelector("button[type=submit]")).not.toBeNull();
+  expect(beam.querySelector("input")).toBeNull();
+  expect(beam.querySelector("form")).toBeNull();
   await render({ activeNote: duplicateA });
   expect(container.textContent).toContain(current.path);
   const captured: QuizGenerationRequest = mocks.generate.mock.calls[0][0];
@@ -139,6 +145,7 @@ it("prevents duplicate submissions and keeps the original source during a note s
   expect(captured.isSourceAvailable()).toBe(true);
   await act(async () => finish(result(captured)));
   expect(container.textContent).toContain("in Current.");
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="true"]')).not.toBeNull();
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Open Note")!.click());
   expect(props.onOpenNote).toHaveBeenCalledWith(current.path);
 });
@@ -181,9 +188,25 @@ it("shows controlled failures and clears them on a successful retry", async () =
   await render();
   await submit();
   expect(container.textContent).toContain("Please regenerate");
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="false"]')).not.toBeNull();
   await submit();
   expect(container.textContent).toContain("Quiz created");
   expect(container.textContent).not.toContain("Please regenerate");
+});
+
+it("stops electricity immediately on cancellation before the provider settles", async () => {
+  let finish!: (value: QuizGenerationResult) => void;
+  mocks.generate.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  await submit();
+  expect(container.querySelector('[data-electric-active="true"]')).not.toBeNull();
+  const captured: QuizGenerationRequest = mocks.generate.mock.calls[0][0];
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Cancel generation")!.click());
+  expect(captured.signal.aborted).toBe(true);
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="false"]')).not.toBeNull();
+  await act(async () => finish(result(captured)));
+  expect(container.textContent).not.toContain("Quiz created");
+  expect(container.querySelector('[data-electric-fade="true"]')).toBeNull();
 });
 
 it("cancels on unmount and on vault switches without applying a stale response", async () => {
@@ -194,6 +217,7 @@ it("cancels on unmount and on vault switches without applying a stale response",
   const captured: QuizGenerationRequest = mocks.generate.mock.calls[0][0];
   await render({ vaultPath: "/other-vault" });
   expect(captured.signal.aborted).toBe(true);
+  expect(container.querySelector('[data-electric-active="false"][data-electric-fade="false"]')).not.toBeNull();
   expect(captured.isSourceAvailable()).toBe(false);
   await act(async () => finish(result(captured)));
   expect(container.textContent).not.toContain("Quiz created");

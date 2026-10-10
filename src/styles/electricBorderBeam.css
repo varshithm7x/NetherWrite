@@ -1,0 +1,33 @@
+.electric-border-beam {
+  position: relative;
+  min-width: 0;
+  isolation: isolate;
+}
+
+.electric-border-beam__surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  z-index: 2;
+  opacity: 0;
+  contain: strict;
+  transition: opacity 320ms ease-out;
+}
+
+.electric-border-beam[data-electric-active="true"] > .electric-border-beam__surface {
+  opacity: 1;
+  transition-duration: 100ms;
+}
+
+.electric-border-beam[data-electric-fade="false"] > .electric-border-beam__surface {
+  transition: none;
+}
+
+.electric-border-beam[data-electric-reduced="true"] > .electric-border-beam__surface { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .electric-border-beam__surface { transition: none; }
+}

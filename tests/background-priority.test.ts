@@ -52,3 +52,28 @@ it("preserves active/recent note ordering when merging initialization jobs once"
   await vi.advanceTimersByTimeAsync(1); release(); await vi.runAllTimersAsync();
   expect(mocks.embed.mock.calls.map(call => call[1])).toEqual(["Active.md", "Recent.md", "Other.md"]);
 });
+
+it("coalesces same-priority saves and watcher events into the latest pending note", async () => {
+  vi.useFakeTimers(); const release = foreground();
+  enqueueJob({ id: "held", type: "embed", path: "First.md", content: "First", priority: 0, enqueuedAt: 1 });
+  const processing = startProcessing(); await vi.advanceTimersByTimeAsync(1);
+  enqueueJob({ id: "old", type: "embed", path: "Edited.md", content: "Old content", priority: 0, enqueuedAt: 2 });
+  enqueueJob({ id: "new", type: "embed", path: "Edited.md", content: "Latest saved content", priority: 0, enqueuedAt: 3 });
+  expect(getQueueLength()).toBe(1);
+  release(); await vi.runAllTimersAsync(); await processing;
+  expect(mocks.embed.mock.calls.filter(call => call[1] === "Edited.md")).toHaveLength(1);
+  expect(mocks.embed.mock.calls.find(call => call[1] === "Edited.md")?.[2]).toBe("Latest saved content");
+});
+
+it("processes repeated start requests through one worker without concurrent inference", async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  mocks.embed.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  enqueueJob({ id: "a", type: "embed", path: "A.md", content: "A", priority: 0, enqueuedAt: 1 });
+  enqueueJob({ id: "b", type: "embed", path: "B.md", content: "B", priority: 0, enqueuedAt: 2 });
+  const processing = startProcessing(); await vi.advanceTimersByTimeAsync(1);
+  await startProcessing(); await startProcessing();
+  expect(mocks.embed).toHaveBeenCalledOnce();
+  finish(); await vi.runAllTimersAsync(); await processing;
+  expect(mocks.embed).toHaveBeenCalledTimes(2);
+});

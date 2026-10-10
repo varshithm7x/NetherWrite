@@ -331,6 +331,12 @@ export function createMockAPI(): ElectronAPI {
       mockFiles[filePath] = new TextDecoder().decode(content);
     },
 
+    importResource: async (vaultPath: string, originalPath: string, bytes: Uint8Array, notePath: string | null, content: string) => {
+      if (await mockAPI.getVaultPath() !== vaultPath) throw new Error("The vault changed during upload.");
+      mockFiles[originalPath] = new TextDecoder().decode(bytes);
+      if (notePath) mockFiles[notePath] = content;
+    },
+
     createFile: async (filePath: string, content?: string) => {
       if (!mockFiles[filePath]) {
         mockFiles[filePath] = content || "";

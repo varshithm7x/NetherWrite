@@ -502,7 +502,9 @@ async function embedCleanChunks(cleanChunks: string[], background = false, isCur
   if (_disabledReason) return cleanChunks.map((chunk) => lexicalEmbedText(chunk));
 
   const vectors: number[][] = [];
-  const batchSize = 8;
+  // Background WASM runs on the renderer thread in this compatibility backend.
+  // Keep its uninterrupted inference window small, then yield for user input.
+  const batchSize = background ? 1 : 8;
   for (let start = 0; start < cleanChunks.length; start += batchSize) {
     if (background) await waitForForegroundGeneration();
     if (!isCurrent()) throw new Error("Note analysis context changed");

@@ -13,6 +13,8 @@ export interface PdfViewerOptions {
 const PDFJS_ASSET_BASE = `${import.meta.env.BASE_URL || './'}pdfjs/`;
 const MAX_RENDER_PIXELS = 12000000;
 const MAX_DEVICE_PIXEL_RATIO = 3;
+const MAX_DOCUMENT_RENDER_PIXELS = 6000000;
+const MAX_DOCUMENT_PIXEL_RATIO = 2;
 
 /** Canvas-only PDF rendering. No PDF scripts, forms, annotations or remote iframe. */
 export function createPdfViewer(options: PdfViewerOptions): HTMLElement {
@@ -42,25 +44,38 @@ export function createPdfViewer(options: PdfViewerOptions): HTMLElement {
     else if (mounted && !host.isConnected) dispose();
   });
   const size = new ResizeObserver(() => { if (pdf && !busy) { if (full) void layoutPages(); else void render(); } });
-  type PageSlot = { element: HTMLElement; canvas: HTMLCanvasElement | null; task: RenderTask | null; visible: boolean };
+  type PageSlot = { element: HTMLElement; canvas: HTMLCanvasElement | null; task: RenderTask | null; visible: boolean; loading: boolean };
   let slots: PageSlot[] = [], pagesObserver: IntersectionObserver | null = null;
   let layoutId = 0;
-  const clearPages = () => { layoutId++; pagesObserver?.disconnect(); slots.forEach(slot => { slot.task?.cancel(); if (slot.canvas) { slot.canvas.width = 0; slot.canvas.height = 0; } }); slots = []; };
+  const clearPages = () => { layoutId++; pagesObserver?.disconnect(); slots.forEach(slot => { slot.visible = false; slot.task?.cancel(); if (slot.canvas) { slot.canvas.width = 0; slot.canvas.height = 0; } }); slots = []; };
   const renderSlot = async (slot: PageSlot, index: number) => {
-    if (!pdf || disposed || slot.canvas || !slot.visible) return;
+    if (!pdf || disposed || slot.canvas || !slot.visible || slot.loading) return;
     const document = pdf;
-    const current = await document.getPage(index + 1);
-    if (disposed || pdf !== document || !slot.visible || slot.canvas) return;
-    const base = current.getViewport({ scale: 1 });
-    const width = parseFloat(slot.element.style.width);
-    const scale = Math.min(width / base.width * Math.min(devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO), Math.sqrt(MAX_RENDER_PIXELS / (base.width * base.height)));
-    const view = current.getViewport({ scale });
-    const canvas = window.document.createElement('canvas');
-    canvas.width = Math.ceil(view.width); canvas.height = Math.ceil(view.height);
-    canvas.setAttribute('aria-label', `${options.title}, page ${index + 1} of ${document.numPages}`);
-    slot.canvas = canvas; slot.element.replaceChildren(canvas);
-    slot.task = current.render({ canvas, viewport: view });
-    try { await slot.task.promise; } catch (error) { if ((error as Error).name !== 'RenderingCancelledException' && !disposed) slot.element.setAttribute('aria-label', 'Could not render this page'); }
+    const revision = layoutId;
+    slot.loading = true;
+    let rendered = false;
+    try {
+      const current = await document.getPage(index + 1);
+      if (disposed || revision !== layoutId || pdf !== document || !slot.visible || slot.canvas) return;
+      const base = current.getViewport({ scale: 1 });
+      const width = parseFloat(slot.element.style.width);
+      slot.element.style.height = `${width * base.height / base.width}px`;
+      // Bound document-tab memory; only nearby pages own canvases.
+      const scale = Math.min(width / base.width * Math.min(devicePixelRatio || 1, MAX_DOCUMENT_PIXEL_RATIO), Math.sqrt(MAX_DOCUMENT_RENDER_PIXELS / (base.width * base.height)));
+      const view = current.getViewport({ scale });
+      const canvas = window.document.createElement('canvas');
+      canvas.width = Math.ceil(view.width); canvas.height = Math.ceil(view.height);
+      canvas.setAttribute('aria-label', `${options.title}, page ${index + 1} of ${document.numPages}`);
+      slot.canvas = canvas; slot.element.replaceChildren(canvas);
+      rendered = true;
+      slot.task = current.render({ canvas, viewport: view });
+      try { await slot.task.promise; } catch (error) { if ((error as Error).name !== 'RenderingCancelledException' && !disposed) slot.element.setAttribute('aria-label', 'Could not render this page'); }
+    } finally {
+      slot.loading = false;
+      if (rendered && slot.visible && !slot.canvas && !disposed && revision === layoutId && pdf === document) {
+        void renderSlot(slot, index).catch(() => { slot.element.setAttribute('aria-label', 'Preview unavailable'); });
+      }
+    }
   };
   const layoutPages = async () => {
     if (!pdf || disposed) return;
@@ -68,21 +83,23 @@ export function createPdfViewer(options: PdfViewerOptions): HTMLElement {
     if (slots.length && Math.abs(parseFloat(slots[0].element.style.width) - width) < 1) return;
     const oldTop = viewport.scrollTop, oldHeight = viewport.scrollHeight;
     clearPages(); const revision = layoutId, document = pdf;
+    // Use the first page for lightweight placeholders. Load precise page geometry
+    // when each page approaches the viewport, instead of parsing the entire PDF first.
+    const first = await document.getPage(1);
+    if (disposed || revision !== layoutId) return;
+    const base = first.getViewport({ scale: 1 });
     viewport.replaceChildren();
     for (let index = 0; index < document.numPages; index++) {
-      const current = await document.getPage(index + 1);
-      if (disposed || revision !== layoutId) return;
-      const base = current.getViewport({ scale: 1 });
       const element = window.document.createElement('div'); element.className = 'pdf-viewer-page';
       element.style.width = `${width}px`; element.style.height = `${width * base.height / base.width}px`;
       element.dataset.page = String(index + 1); viewport.append(element);
-      slots.push({ element, canvas: null, task: null, visible: false });
+      slots.push({ element, canvas: null, task: null, visible: false, loading: false });
     }
     viewport.scrollTop = oldHeight ? oldTop / oldHeight * viewport.scrollHeight : oldTop;
     pagesObserver = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
       for (const entry of entries) {
         const index = Number((entry.target as HTMLElement).dataset.page) - 1, slot = slots[index];
-        if (!slot) continue; slot.visible = entry.isIntersecting;
+        if (!slot || slot.element !== entry.target) continue; slot.visible = entry.isIntersecting;
         if (slot.visible) void renderSlot(slot, index).catch(() => { slot.element.setAttribute('aria-label', 'Preview unavailable'); });
         else { slot.task?.cancel(); slot.task = null; if (slot.canvas) { slot.canvas.width = 0; slot.canvas.height = 0; slot.canvas.remove(); slot.canvas = null; } }
       }
@@ -92,8 +109,13 @@ export function createPdfViewer(options: PdfViewerOptions): HTMLElement {
   viewport.addEventListener('scroll', () => {
     if (!full || !pdf) return;
     const top = viewport.getBoundingClientRect().top;
-    const current = slots.findIndex(slot => slot.element.getBoundingClientRect().bottom > top + 20);
-    page = Math.max(1, current + 1); counter.textContent = `${page} / ${pdf.numPages}`;
+    let low = 0, high = slots.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (slots[middle].element.getBoundingClientRect().bottom > top + 20) high = middle;
+      else low = middle + 1;
+    }
+    page = Math.min(pdf.numPages, Math.max(1, low + 1)); counter.textContent = `${page} / ${pdf.numPages}`;
   });
   host.addEventListener('pointerdown', event => { if (full && !(event.target as HTMLElement).closest('button')) viewport.focus({ preventScroll: true }); });
   host.addEventListener('keydown', event => {
@@ -105,6 +127,7 @@ export function createPdfViewer(options: PdfViewerOptions): HTMLElement {
     if (!full && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && pdf) { event.preventDefault(); page = Math.max(1, Math.min(pdf.numPages, page + (event.key === 'ArrowRight' ? 1 : -1))); void render(); }
   });
   const dispose = () => {
+    if (disposed) return;
     disposed = true; clearPages(); renderId++; observer.disconnect(); size.disconnect(); task?.cancel();
     void loading?.destroy().catch(() => {}); void pending?.destroy().catch(() => {}); loading = null; pending = null; pdf = null;
   };

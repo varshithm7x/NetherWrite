@@ -65,6 +65,9 @@ const electronAPI = {
   writeBinary: (filePath: string, content: Uint8Array): Promise<void> =>
     ipcRenderer.invoke('fs:writeBinary', filePath, content),
 
+  importResource: (vaultPath: string, originalPath: string, bytes: Uint8Array, notePath: string | null, content: string): Promise<void> =>
+    ipcRenderer.invoke('fs:importResource', vaultPath, originalPath, bytes, notePath, content),
+
   createFile: (filePath: string, content?: string): Promise<void> =>
     ipcRenderer.invoke('fs:createFile', filePath, content),
 

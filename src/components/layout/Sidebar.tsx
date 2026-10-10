@@ -38,6 +38,7 @@ import { getNoteName } from "../../utils/helpers";
 import { PluginViewPanel } from "../plugins/PluginViewPanel";
 import { LocalGroup } from "../../lib/localdb";
 import { getAPI } from "../../utils/api";
+import { ResourceUpload } from "./ResourceUpload";
 
 interface SidebarProps {
   visible: boolean;
@@ -1293,6 +1294,8 @@ function SidebarComponent({
                 </div>
               )}
             </div>
+
+            <ResourceUpload vaultPath={vaultPath} onRefresh={onRefresh} onOpen={onFileSelect} />
 
             {/* Apple Notes Content Wrapper */}
             <div className="nn-explorer-container flex-1">
