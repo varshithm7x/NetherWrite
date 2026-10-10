@@ -30,7 +30,7 @@ export function prepareForgeSource(source: string, count: number, modelId: strin
   if (getCommentDisplayText(content).replace(/\s/g, "").length < 120) {
     throw new ForgeGenerationError(`This note is too short for ${tool === "quiz" ? "a reliable quiz" : "reliable flashcards"}. Add more meaningful content first.`);
   }
-  return { content, truncated: end < body.length, outputTokens };
+  return { content, sourceOffset: frontmatter?.[0].length || 0, truncated: end < body.length, outputTokens };
 }
 
 

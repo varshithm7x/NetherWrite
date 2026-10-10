@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { TextEncoder } from "node:util";
 import { beforeEach, expect, it, vi } from "vitest";
-import { generateNoteQuiz, parseGeneratedQuiz, prepareQuizSource, resolveQuizExcerpt, searchQuizNotes } from "../src/utils/quiz-generation";
+import { generateNoteQuiz, parseGeneratedQuiz, prepareQuizPassages, prepareQuizSource, resolveQuizExcerpt, searchQuizNotes } from "../src/utils/quiz-generation";
 import { addComment, addQuizComment, getCommentsSync, loadComments, setCommentsVaultPath } from "../src/utils/commentsStore";
 import { AIProviderRequestError } from "../src/utils/ai-core";
 
@@ -79,7 +79,7 @@ it("generates a complete topic set through the real comments store without alter
   expect(mocks.dataWrite.mock.calls[0][2]).toEqual({ atomic: true, expectedVaultPath: vaultPath });
   const prompt = JSON.parse(mocks.ask.mock.calls[0][1]);
   expect(prompt.requestedTotal).toBe(3);
-  expect(prompt.noteContent).not.toContain("title: Operating Systems");
+  expect(prompt.sourcePassages.map((passage: { text: string }) => passage.text).join("\n")).not.toContain("title: Operating Systems");
   expect(job.readNote.mock.calls.every(([path]) => path === note.path)).toBe(true);
 });
 
@@ -158,7 +158,7 @@ it("uses CodeMirror-compatible coordinates for notes with CRLF line endings", as
   job.readNote.mockResolvedValue({ content: source.replace(/\n/g, "\r\n"), revision: source.replace(/\n/g, "\r\n") });
   const result = await generateNoteQuiz(job);
   expect(result.comments[0].from).toBe(source.indexOf(firstPassage));
-  expect(JSON.parse(mocks.ask.mock.calls[0][1]).noteContent).not.toContain("\r");
+  expect(JSON.parse(mocks.ask.mock.calls[0][1]).sourcePassages.map((passage: { text: string }) => passage.text).join("\n")).not.toContain("\r");
 });
 
 it("rejects deleted notes, moved sources, and cancellations without writing", async () => {
@@ -234,4 +234,61 @@ it("searches titles and paths and distinguishes duplicate filenames", () => {
   const notes = [{ name: "OS", path: "Beginner/OS.md" }, { name: "OS", path: "Advanced/OS.md" }, { name: "Board", path: "Board.canvas" }];
   expect(searchQuizNotes(notes, "@OS").map(note => note.path)).toEqual(["Advanced/OS.md", "Beginner/OS.md"]);
   expect(searchQuizNotes(notes, "@Beginner")).toEqual([notes[0]]);
+});
+
+it("anchors quizzes by app-owned passage IDs without requiring the AI to copy Markdown", async () => {
+  mocks.ask.mockImplementation(async (_system: string, user: string) => {
+    const prompt = JSON.parse(user);
+    return JSON.stringify({ topics: [
+      { topic: "Deadlocks", sourcePassageId: prompt.sourcePassages.find((passage: { text: string }) => passage.text.includes(firstPassage)).id, questions: [question(1), question(2)] },
+      { topic: "Scheduling", sourcePassageId: prompt.sourcePassages.find((passage: { text: string }) => passage.text.includes(secondPassage)).id, questions: [question(3)] },
+    ] });
+  });
+  const job = request();
+  job.readNote.mockResolvedValue({ content: source.replace(/\n/g, "\r\n"), revision: source.replace(/\n/g, "\r\n") });
+  const result = await generateNoteQuiz(job);
+  expect(result.comments.map(comment => comment.selectedText)).toEqual([firstPassage, secondPassage]);
+  for (const comment of result.comments) expect(source.slice(comment.from, comment.to)).toBe(comment.selectedText);
+  expect(mocks.ask.mock.calls[0][0]).toContain("Do not copy, rewrite, or return source excerpts");
+  expect(mocks.dataWrite).toHaveBeenCalledOnce();
+});
+
+it("distinguishes repeated passages by their actual positions in the note", async () => {
+  const repeated = `${source}\n${firstPassage}\n`;
+  const job = request(1);
+  job.readNote.mockResolvedValue({ content: repeated, revision: repeated });
+  mocks.ask.mockImplementation(async (_system: string, user: string) => {
+    const passages = JSON.parse(user).sourcePassages;
+    return JSON.stringify({ topics: [{ topic: "Deadlocks", sourcePassageId: passages[passages.length - 1].id, questions: [question(1)] }] });
+  });
+  const result = await generateNoteQuiz(job);
+  expect(result.comments[0].from).toBe(repeated.lastIndexOf(firstPassage));
+  expect(result.comments[0].selectedText).toBe(firstPassage);
+});
+
+it("rejects unknown passage IDs before saving any topics", async () => {
+  mocks.ask.mockResolvedValue(JSON.stringify({ topics: [
+    { topic: "Deadlocks", sourcePassageId: "passage-1", questions: [question(1)] },
+    { topic: "Scheduling", sourcePassageId: "passage-invented", questions: [question(2)] },
+  ] }));
+  await expect(generateNoteQuiz(request())).rejects.toThrow(/unknown supporting passage/);
+  expect(mocks.dataWrite).not.toHaveBeenCalled();
+});
+
+it("preserves source offsets when splitting long passages and skips surrogate-pair boundaries", () => {
+  const content = "a".repeat(3999) + "😀" + "b".repeat(3000);
+  const passages = prepareQuizPassages(content, 45);
+  expect(passages.map(passage => passage.text).join("")).toBe(content);
+  expect(passages[0].text.length).toBe(3999);
+  for (const passage of passages) {
+    expect(passage.text.length).toBeLessThanOrEqual(4000);
+    expect(content.slice(passage.from - 45, passage.to - 45)).toBe(passage.text);
+  }
+});
+
+it("keeps short bullet passages and the final characters of a split paragraph", () => {
+  const bullets = "- RAM is volatile\n\n- ROM is nonvolatile\n";
+  expect(prepareQuizPassages(bullets).map(passage => passage.text)).toEqual(["- RAM is volatile", "- ROM is nonvolatile"]);
+  const long = "a".repeat(4000) + "END";
+  expect(prepareQuizPassages(long).map(passage => passage.text).join("")).toBe(long);
 });
