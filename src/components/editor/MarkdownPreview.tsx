@@ -625,6 +625,7 @@ export function applyCommentHighlightsToHtml(
   if (comments) {
     for (const c of comments) {
       if (c.resolved) continue;
+      if (c.type === "quiz" && c.from >= c.to) continue;
       const phrase = getCommentRangeText(source, c.from, c.to, c.selectedText);
       const occurrenceIndex = getSourceOccurrenceIndex(source, phrase, c.from);
       result = markHtmlTextOccurrence(

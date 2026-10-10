@@ -30,6 +30,7 @@ import { EditorCommentsLayer } from "./EditorCommentsLayer";
 import {
   getCommentsSync,
   loadComments,
+  updateQuizCommentAnchors,
   addComment,
   deleteComment,
   updateComment,
@@ -38,7 +39,7 @@ import {
   subscribeToComments,
 } from "../../utils/commentsStore";
 import type { NoteComment, PendingComment } from "../../types/comments";
-import { normalizeCommentAnchors, resolveCommentSourceRange } from "../../utils/comment-anchors";
+import { mergeQuizCommentAnchors, normalizeCommentAnchors, resolveCommentSourceRange } from "../../utils/comment-anchors";
 import { Compartment, EditorState, Transaction, StateEffect, StateField, EditorSelection } from "@codemirror/state";
 import {
   EditorView,
@@ -4408,17 +4409,33 @@ export function Editor({
           });
         }
       }
+    }).catch(() => {
+      // A vault switch invalidated this pending comment read.
     });
   }, [activePath]);
 
   useEffect(() => {
     const unsub = subscribeToComments((path, updated) => {
       if (path === activePathRef.current) {
-        setComments(updated);
+        const mapped = viewRef.current?.state.field(commentStateField, false)?.comments || [];
+        const latest = mergeQuizCommentAnchors(updated, mapped);
+        setComments(latest);
         viewRef.current?.dispatch({
-          effects: setCommentsEffect.of(updated),
+          effects: setCommentsEffect.of(latest),
         });
       }
+    }, () => {
+      const path = activePathRef.current;
+      setComments([]);
+      viewRef.current?.dispatch({ effects: setCommentsEffect.of([]) });
+      if (!path) return;
+      void loadComments(path).then(loaded => {
+        if (activePathRef.current !== path) return;
+        setComments(loaded);
+        viewRef.current?.dispatch({ effects: setCommentsEffect.of(loaded) });
+      }).catch(() => {
+        // A newer vault switch superseded this reload.
+      });
     });
 
     const handleSelectCommentEvent = (e: Event) => {
@@ -5499,6 +5516,15 @@ export function Editor({
                 tr.isUserEvent("setContent"),
             );
             const isUserEdit = !isRemoteOrSync;
+            if (activePathRef.current && !update.transactions.some(tr => tr.isUserEvent("setContent"))) {
+              const mappedComments = update.state.field(commentStateField, false)?.comments || [];
+              if (mappedComments.some(comment => comment.type === "quiz")) {
+                setComments(current => mergeQuizCommentAnchors(current, mappedComments));
+              }
+              void updateQuizCommentAnchors(activePathRef.current, mappedComments).catch(error => {
+                console.warn("[Comments] Could not save quiz anchors:", error);
+              });
+            }
             // Read from refs to avoid stale closures -- the CM view is
             // created once per tab and these callbacks change when the
             // collab space becomes active asynchronously.

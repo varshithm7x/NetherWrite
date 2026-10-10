@@ -23,14 +23,18 @@ function buildDecorations(
   comments: NoteComment[],
   pending: PendingCommentRange | null,
   activeId: string | null,
-  docLength: number
+  source: string
 ): DecorationSet {
+  const docLength = source.length;
   const items: { from: number; to: number; deco: Decoration }[] = [];
 
   for (const c of comments) {
     if (c.resolved) continue;
-    const from = Math.max(0, Math.min(c.from, docLength));
-    const to = Math.max(from, Math.min(c.to, docLength));
+    // Hide mismatched quiz highlights without discarding persisted anchors
+    // while the note content is still loading into the editor.
+    const anchor = c.type === "quiz" ? normalizeCommentAnchors([c], source)[0] : c;
+    const from = Math.max(0, Math.min(anchor.from, docLength));
+    const to = Math.max(from, Math.min(anchor.to, docLength));
     if (from < to) {
       const isActive = c.id === activeId;
       items.push({
@@ -87,6 +91,13 @@ export const commentStateField = StateField.define<CommentExtensionState>({
     if (tr.docChanged) {
       // Map existing comment coordinates across changes
       comments = comments.map((c) => {
+        if (c.type === "quiz") {
+          const currentAnchor = normalizeCommentAnchors([c], tr.startState.doc.toString())[0];
+          // Loading/replacing a document is not an edit of its anchored passage.
+          // Preserve raw coordinates until their own note content is available.
+          if (tr.isUserEvent("setContent") || tr.newDoc.eq(tr.startState.doc)
+            || currentAnchor.from === currentAnchor.to) return c;
+        }
         // Use the changeset source length rather than a possibly stale
         // document snapshot. Comments can arrive asynchronously while a
         // note is being replaced during tab/file activation.
@@ -99,6 +110,7 @@ export const commentStateField = StateField.define<CommentExtensionState>({
           ...c,
           from: newFrom,
           to: Math.max(newFrom, newTo),
+          ...(c.type === "quiz" ? { selectedText: tr.newDoc.sliceString(newFrom, Math.max(newFrom, newTo)) } : {}),
         };
       });
 
@@ -118,7 +130,8 @@ export const commentStateField = StateField.define<CommentExtensionState>({
 
     for (const e of tr.effects) {
       if (e.is(setCommentsEffect)) {
-        comments = normalizeCommentAnchors(e.value, tr.newDoc.toString());
+        const normalized = normalizeCommentAnchors(e.value, tr.newDoc.toString());
+        comments = normalized.map((comment, index) => comment.type === "quiz" ? e.value[index] : comment);
         needsRebuild = true;
       } else if (e.is(setPendingCommentEffect)) {
         pending = e.value;
@@ -134,7 +147,7 @@ export const commentStateField = StateField.define<CommentExtensionState>({
         comments,
         pending,
         activeId,
-        tr.newDoc.length
+        tr.newDoc.toString()
       );
       return { comments, pending, activeId, decorations };
     }

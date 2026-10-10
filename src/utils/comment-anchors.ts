@@ -96,6 +96,15 @@ export function resolveCommentSourceRange(
 
 export function normalizeCommentAnchors(comments: NoteComment[], source: string): NoteComment[] {
   return comments.map((comment) => {
+    // Quiz ranges are mapped and saved on edits. Never search for another
+    // occurrence of a removed passage; leave its card at its last position.
+    if (comment.type === "quiz") {
+      const from = Math.max(0, Math.min(comment.from, source.length));
+      const to = Math.max(from, Math.min(comment.to, source.length));
+      const matches = from < to && normalizeText(getCommentDisplayText(source.slice(from, to)))
+        === normalizeText(getCommentDisplayText(comment.selectedText));
+      return matches ? comment : { ...comment, from, to: from };
+    }
     const range = resolveCommentSourceRange(
       source,
       comment.from,
@@ -105,5 +114,16 @@ export function normalizeCommentAnchors(comments: NoteComment[], source: string)
     return range.from === comment.from && range.to === comment.to
       ? comment
       : { ...comment, ...range };
+  });
+}
+
+/** Preserve live quiz coordinates when an earlier disk write publishes updates. */
+export function mergeQuizCommentAnchors(comments: NoteComment[], mappedComments: NoteComment[]): NoteComment[] {
+  const mapped = new Map(mappedComments.filter(c => c.type === "quiz").map(c => [c.id, c]));
+  return comments.map(comment => {
+    const anchor = mapped.get(comment.id);
+    if (comment.type !== "quiz" || !anchor || anchor.notePath !== comment.notePath
+      || (comment.from === anchor.from && comment.to === anchor.to && comment.selectedText === anchor.selectedText)) return comment;
+    return { ...comment, from: anchor.from, to: anchor.to, selectedText: anchor.selectedText };
   });
 }

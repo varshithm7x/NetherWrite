@@ -3,12 +3,13 @@ import { BacklinksPanel } from "../panels/BacklinksPanel";
 import { OutgoingLinksPanel } from "../panels/OutgoingLinksPanel";
 import { OutlinePane } from "../panels/OutlinePane";
 import { UnlinkedMentionsPanel } from "../panels/UnlinkedMentionsPanel";
+import { ForgePanel } from "../panels/ForgePanel";
 import { getPluginScopeClass } from "../../lib/pluginStyles";
 import type { Theme, FileEntry } from "../../types";
 
 const AIPage = React.lazy(() => import("../ai/AIPage").then(m => ({ default: m.AIPage })));
 
-export type RightSidebarTabType = "backlinks" | "outgoing" | "outline" | "ai" | string;
+export type RightSidebarTabType = "backlinks" | "outgoing" | "outline" | "ai" | "forge" | string;
 
 interface PluginViewHostProps {
   view: { containerEl: HTMLElement; pluginId?: string };
@@ -98,6 +99,12 @@ export function RightSidebar({
   onClosePluginView,
 }: RightSidebarProps) {
   const activePluginView = rightPluginViews.find((v) => v.viewType === activeTab);
+  const [keepIntelligenceMounted, setKeepIntelligenceMounted] = React.useState(activeTab === "ai");
+
+  React.useEffect(() => {
+    if (activeTab === "ai") setKeepIntelligenceMounted(true);
+    else if (activeTab !== "forge") setKeepIntelligenceMounted(false);
+  }, [activeTab]);
 
   return (
     <div
@@ -173,8 +180,15 @@ export function RightSidebar({
           </div>
         )}
 
-        {activeTab === "ai" && vaultPath && (
-          <div className="right-sidebar-view flex flex-col h-full overflow-hidden">
+        {activeTab === "forge" && (
+          <div className="right-sidebar-view h-full">
+            <ForgePanel onClose={onClose} />
+          </div>
+        )}
+
+        {/* Retain Intelligence's local state when switching to Forge. */}
+        {(activeTab === "ai" || (activeTab === "forge" && keepIntelligenceMounted)) && vaultPath && (
+          <div hidden={activeTab !== "ai"} inert={activeTab !== "ai"} className={`right-sidebar-view h-full overflow-hidden ${activeTab === "ai" ? "flex flex-col" : "hidden"}`}>
             <React.Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">Loading AI...</div>}>
               <AIPage
                 vaultPath={vaultPath}

@@ -4,6 +4,7 @@ import type { EditorView } from "@codemirror/view";
 import { X } from "lucide-react";
 import type { NoteComment, PendingComment } from "../../types/comments";
 import { CommentInputBox, CommentCard, CommentBadge } from "./CommentComponents";
+import { answerQuizQuestion } from "../../utils/commentsStore";
 
 interface EditorCommentsLayerProps {
   view: EditorView | null;
@@ -95,6 +96,7 @@ function getCommentImagePresence(comment: NoteComment): boolean {
 }
 
 function shouldCollapseWideComment(comment: NoteComment, _isActive: boolean): boolean {
+  if (comment.type === "quiz") return false;
   const replyCount = comment.replies?.length || 0;
   const textLength = comment.content?.replace(/<[^>]*>/g, "").length || 0;
   const blockCount = comment.content?.match(/<(?:p|div|br|li)\b/gi)?.length || 0;
@@ -102,6 +104,7 @@ function shouldCollapseWideComment(comment: NoteComment, _isActive: boolean): bo
 }
 
 function estimateWideCommentHeight(comment: NoteComment, isActive: boolean): number {
+  if (comment.type === "quiz") return 320;
   if (shouldCollapseWideComment(comment, isActive)) return 118;
 
   const replyCount = comment.replies?.length || 0;
@@ -487,6 +490,9 @@ export const EditorCommentsLayer: React.FC<EditorCommentsLayerProps> = ({
                 {isPopoverOpen && (
                   <div
                     className="cm-comment-popover pointer-events-auto absolute right-0 top-7 z-[60] flex w-[310px] flex-col gap-2 transition-all"
+                    style={group.comments.some(c => c.type === "quiz") && targetScrollEl.clientWidth > 0
+                      ? { width: `${Math.min(310, Math.max(160, targetScrollEl.clientWidth - 28))}px` }
+                      : undefined}
                     onClick={(e) => e.stopPropagation()}
                     onMouseDown={(e) => e.stopPropagation()}
                   >
@@ -520,6 +526,9 @@ export const EditorCommentsLayer: React.FC<EditorCommentsLayerProps> = ({
                               }
                             }}
                             onDelete={() => onDeleteComment(c.id)}
+                            onAnswerQuiz={async (questionId, index) => {
+                              await answerQuizQuestion(c.notePath, c.id, questionId, index);
+                            }}
                             onEdit={(text, img) => onEditComment(c.id, text, img)}
                             onReply={(text, img) => onReplyComment(c.id, text, img)}
                           />
@@ -598,6 +607,9 @@ export const EditorCommentsLayer: React.FC<EditorCommentsLayerProps> = ({
                       }
                     }}
                     onDelete={() => onDeleteComment(c.id)}
+                    onAnswerQuiz={async (questionId, index) => {
+                      await answerQuizQuestion(c.notePath, c.id, questionId, index);
+                    }}
                     onEdit={(text, img) => onEditComment(c.id, text, img)}
                     onReply={(text, img) => onReplyComment(c.id, text, img)}
                     defaultCollapsed={shouldCollapseWideComment(c, isActive)}

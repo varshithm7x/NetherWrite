@@ -29,6 +29,7 @@ import {
   Link2Off,
   List,
   Sparkles,
+  Blocks,
 } from "lucide-react";
 
 // Custom Backlinks (incoming arrow) SVG
@@ -936,9 +937,26 @@ function TitleBarComponent({
                     : "text-(--text-muted) hover:text-(--text-secondary)"
                 }`}
                 onClick={() => setActiveRightTab("ai")}
-                data-tooltip="AI Assistant"
+                data-tooltip="Vault Intelligence"
+                aria-label="Vault Intelligence"
+                aria-pressed={activeRightTab === "ai"}
               >
                 <Sparkles size={20} strokeWidth={1.5} />
+              </button>
+
+              <button
+                type="button"
+                className={`${titlebarActionBtnClass} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--interactive-accent) ${
+                  activeRightTab === "forge"
+                    ? "bg-(--bg-active) !text-(--text-primary)"
+                    : "text-(--text-muted) hover:text-(--text-secondary)"
+                }`}
+                onClick={() => setActiveRightTab("forge")}
+                data-tooltip="Forge"
+                aria-label="Forge"
+                aria-pressed={activeRightTab === "forge"}
+              >
+                <Blocks size={20} strokeWidth={1.5} />
               </button>
 
               {rightPluginViews.map((view) => (

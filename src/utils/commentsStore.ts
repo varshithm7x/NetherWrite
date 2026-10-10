@@ -1,16 +1,38 @@
 import { v4 as uuidv4 } from "uuid";
 import { readData, writeData } from "./disk-store";
 import { authManager } from "../lib/auth";
-import type { NoteComment, CommentAuthor, CommentReply } from "../types/comments";
+import type { NoteComment, CommentAuthor, CommentReply, QuizComment } from "../types/comments";
+import { deserializeComments, isQuizAnswerIndex, parseQuizComment, parseQuizData } from "./quiz-comments";
+import { mergeQuizCommentAnchors } from "./comment-anchors";
 
 const STORAGE_FILE = "comments.json";
 const LOCAL_STORAGE_PREFIX = "netherwrite:comments:";
 const COMMENTS_EVENT = "netherwrite:comments-changed";
+const COMMENTS_VAULT_EVENT = "netherwrite:comments-vault-changed";
 
 // In-memory cache: notePath -> NoteComment[]
 const commentsCache = new Map<string, NoteComment[]>();
 let isDiskLoaded = false;
 let allDiskComments: Record<string, NoteComment[]> = {};
+let commentsVaultPath: string | null = null;
+let vaultVersion = 0;
+
+/** Relative note names must never share cached comments across vaults. */
+export function setCommentsVaultPath(vaultPath: string | null): void {
+  if (commentsVaultPath === vaultPath) return;
+  commentsVaultPath = vaultPath;
+  vaultVersion++;
+  commentsCache.clear();
+  allDiskComments = {};
+  isDiskLoaded = false;
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(COMMENTS_VAULT_EVENT));
+}
+
+function localCommentsKey(notePath: string): string {
+  return commentsVaultPath
+    ? `${LOCAL_STORAGE_PREFIX}${encodeURIComponent(commentsVaultPath)}:${notePath}`
+    : LOCAL_STORAGE_PREFIX + notePath;
+}
 
 export function getCurrentUser(): CommentAuthor {
   if (typeof window !== "undefined") {
@@ -65,12 +87,13 @@ export function getCommentsSync(notePath: string): NoteComment[] {
   }
   if (typeof window !== "undefined") {
     try {
-      const raw = localStorage.getItem(LOCAL_STORAGE_PREFIX + notePath);
+      const raw = localStorage.getItem(localCommentsKey(notePath));
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          commentsCache.set(notePath, parsed);
-          return parsed;
+          const comments = deserializeComments(parsed, notePath);
+          commentsCache.set(notePath, comments);
+          return comments;
         }
       }
     } catch {
@@ -85,21 +108,25 @@ export function getCommentsSync(notePath: string): NoteComment[] {
  */
 export async function loadComments(notePath: string): Promise<NoteComment[]> {
   if (!notePath) return [];
+  const version = vaultVersion;
 
   if (!isDiskLoaded) {
     try {
       const diskData = await readData<Record<string, NoteComment[]>>(STORAGE_FILE);
+      if (version !== vaultVersion) throw new Error("Comments vault changed during loading");
       if (diskData && typeof diskData === "object") {
         allDiskComments = diskData;
         for (const [path, list] of Object.entries(diskData)) {
           if (Array.isArray(list)) {
-            commentsCache.set(path, list);
+            commentsCache.set(path, deserializeComments(list, path));
           }
         }
       }
     } catch (e) {
+      if (version !== vaultVersion) throw e;
       console.warn("[CommentsStore] Error reading comments from disk:", e);
     }
+    if (version !== vaultVersion) throw new Error("Comments vault changed during loading");
     isDiskLoaded = true;
   }
 
@@ -118,6 +145,15 @@ export async function saveComments(
   comments: NoteComment[]
 ): Promise<void> {
   if (!notePath) return;
+  const version = vaultVersion;
+
+  // Reject invalid writes before changing any cache or existing saved comments.
+  comments = comments.map((comment) => {
+    if (comment.type !== "quiz") return comment;
+    const parsed = parseQuizComment(comment);
+    if (!parsed || parsed.notePath !== notePath) throw new Error("Invalid quiz comment");
+    return parsed;
+  });
 
   commentsCache.set(notePath, comments);
   allDiskComments[notePath] = comments;
@@ -125,7 +161,7 @@ export async function saveComments(
   if (typeof window !== "undefined") {
     try {
       localStorage.setItem(
-        LOCAL_STORAGE_PREFIX + notePath,
+        localCommentsKey(notePath),
         JSON.stringify(comments)
       );
     } catch {
@@ -139,6 +175,7 @@ export async function saveComments(
     console.warn("[CommentsStore] Error writing comments to disk:", e);
   }
 
+  if (version !== vaultVersion) return;
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent(COMMENTS_EVENT, {
@@ -179,6 +216,71 @@ export async function addComment(
   const next = [...current, newComment];
   await saveComments(notePath, next);
   return newComment;
+}
+
+// Serialize quiz mutations so rapid answers cannot overwrite one another or
+// replace the first answer while its disk write is still in flight.
+let quizMutationQueue: Promise<unknown> = Promise.resolve();
+function enqueueQuizMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const version = vaultVersion;
+  const result = quizMutationQueue.then(() => {
+    if (version !== vaultVersion) throw new Error("The quiz's vault is no longer open");
+    return operation();
+  });
+  quizMutationQueue = result.catch(() => {});
+  return result;
+}
+
+/** Future generators can create one anchored topic using this existing store. */
+export function addQuizComment(
+  notePath: string,
+  anchor: Pick<NoteComment, "from" | "to" | "selectedText">,
+  quizData: unknown,
+): Promise<QuizComment> {
+  return enqueueQuizMutation(async () => {
+    const quiz = parseQuizData(quizData);
+    const comment = parseQuizComment({
+      ...anchor,
+      id: uuidv4(), notePath, type: "quiz", quiz,
+      content: "", author: getCurrentUser(), createdAt: Date.now(), resolved: false, replies: [],
+    });
+    if (!comment || !comment.selectedText.trim() || comment.from === comment.to) throw new Error("Invalid quiz comment");
+    const current = await loadComments(notePath);
+    await saveComments(notePath, [...current, comment]);
+    return comment;
+  });
+}
+
+export function answerQuizQuestion(
+  notePath: string,
+  commentId: string,
+  questionId: string,
+  answerIndex: number,
+): Promise<QuizComment | null> {
+  return enqueueQuizMutation(async () => {
+    if (!isQuizAnswerIndex(answerIndex)) throw new Error("Invalid quiz answer");
+    const current = await loadComments(notePath);
+    const comment = parseQuizComment(current.find(c => c.id === commentId));
+    if (!comment || !comment.quiz.questions.some(question => question.id === questionId)) return null;
+    if (Object.prototype.hasOwnProperty.call(comment.quiz.answers, questionId)) return comment;
+    const updated: QuizComment = {
+      ...comment,
+      quiz: { ...comment.quiz, answers: { ...comment.quiz.answers, [questionId]: answerIndex } },
+    };
+    await saveComments(notePath, current.map(c => c.id === commentId ? updated : c));
+    return updated;
+  });
+}
+
+/** Merge mapped quiz anchors with the latest saved answers, never stale payloads. */
+export function updateQuizCommentAnchors(notePath: string, mappedComments: NoteComment[]): Promise<void> {
+  const anchors = mappedComments.filter(c => c.type === "quiz" && c.notePath === notePath);
+  if (anchors.length === 0) return Promise.resolve();
+  return enqueueQuizMutation(async () => {
+    const current = await loadComments(notePath);
+    const next = mergeQuizCommentAnchors(current, anchors);
+    if (next.some((comment, index) => comment !== current[index])) await saveComments(notePath, next);
+  });
 }
 
 /**
@@ -275,7 +377,8 @@ export async function addReply(
  * Subscribe to comments updates.
  */
 export function subscribeToComments(
-  callback: (notePath: string, comments: NoteComment[]) => void
+  callback: (notePath: string, comments: NoteComment[]) => void,
+  onVaultChange?: () => void,
 ): () => void {
   if (typeof window === "undefined") return () => {};
 
@@ -287,7 +390,9 @@ export function subscribeToComments(
   };
 
   window.addEventListener(COMMENTS_EVENT, handler);
+  if (onVaultChange) window.addEventListener(COMMENTS_VAULT_EVENT, onVaultChange);
   return () => {
     window.removeEventListener(COMMENTS_EVENT, handler);
+    if (onVaultChange) window.removeEventListener(COMMENTS_VAULT_EVENT, onVaultChange);
   };
 }

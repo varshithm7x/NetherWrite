@@ -19,6 +19,7 @@ import React, {
 import './lib/obsidian-api/dom-extensions';
 import { TitleBar } from "./components/layout/TitleBar";
 import { Sidebar } from "./components/layout/Sidebar";
+import { setCommentsVaultPath } from "./utils/commentsStore";
 import { Editor } from "./components/editor/Editor";
 import { EditorHeader } from "./components/editor/EditorHeader";
 import { FormattingToolbar } from "./components/layout/FormattingToolbar";
@@ -841,7 +842,7 @@ export default function App() {
 
   // Helper to compute dynamic minimum sidebar width
   const getMinRightSidebarWidth = useCallback((pluginViewsList: any[], activeUsersList: any[]) => {
-    const numIcons = 3 + pluginViewsList.length;
+    const numIcons = 5 + pluginViewsList.length;
     const iconsWidth = numIcons * 32 + (numIcons - 1) * 2 + 8; // button: 32px, gap: 2px, padding-left: 8px
     const isMac = navigator.platform.includes("Mac");
     const controlsWidth = isMac ? 0 : 138; // 3 buttons of 46px
@@ -2200,6 +2201,7 @@ export default function App() {
   // ── Sync global window property for plugin compatibility ─────
   useEffect(() => {
     (window as any).__oo_vault_path = vaultPath;
+    setCommentsVaultPath(vaultPath);
   }, [vaultPath]);
 
   // ── Reset Caches and Queue on Vault Path Change ─────
@@ -4857,7 +4859,8 @@ export default function App() {
       rightSidebarTab !== "outline" &&
       rightSidebarTab !== "backlinks" &&
       rightSidebarTab !== "outgoing" &&
-      rightSidebarTab !== "ai"
+      rightSidebarTab !== "ai" &&
+      rightSidebarTab !== "forge"
     ) {
       const stillExists = rightPluginViews.some((v) => v.viewType === rightSidebarTab);
       if (!stillExists) {

@@ -24,6 +24,30 @@ export interface NoteComment {
   editedAt?: number;
   resolved?: boolean;
   replies?: CommentReply[];
+  type?: "quiz";
+  quiz?: QuizData;
+}
+
+export type QuizAnswerIndex = 0 | 1 | 2 | 3;
+
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: [string, string, string, string];
+  correctIndex: QuizAnswerIndex;
+  explanation: string;
+}
+
+export interface QuizData {
+  topic: string;
+  questions: QuizQuestion[];
+  /** Answers are keyed by stable question identity, independent of pagination. */
+  answers: Record<string, QuizAnswerIndex>;
+}
+
+export interface QuizComment extends NoteComment {
+  type: "quiz";
+  quiz: QuizData;
 }
 
 export interface PendingComment {

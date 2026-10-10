@@ -20,11 +20,14 @@ import {
   Strikethrough,
   Underline,
   X,
+  ListChecks,
 } from "lucide-react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import type { NoteComment, CommentReply } from "../../types/comments";
 import { formatRelativeTime } from "../../utils/commentsStore";
+import { parseQuizData } from "../../utils/quiz-comments";
+import { QuizCommentBody } from "./QuizCommentBody";
 
 interface CommentInputBoxProps {
   initialValue?: string;
@@ -494,6 +497,7 @@ interface CommentCardProps {
   onReply?: (content: string, image?: string) => void;
   onClose?: () => void;
   defaultCollapsed?: boolean;
+  onAnswerQuiz?: (questionId: string, index: number) => Promise<void>;
 }
 
 export const CommentCard: React.FC<CommentCardProps> = ({
@@ -507,6 +511,7 @@ export const CommentCard: React.FC<CommentCardProps> = ({
   onReply,
   onClose,
   defaultCollapsed = false,
+  onAnswerQuiz,
 }) => {
   const [isReplying, setIsReplying] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -516,9 +521,11 @@ export const CommentCard: React.FC<CommentCardProps> = ({
   const [showActions, setShowActions] = useState(false);
   const replyInputRef = useRef<HTMLDivElement>(null);
   const parsedComment = getCommentImage(comment);
+  const isQuiz = comment.type === "quiz";
+  const quiz = React.useMemo(() => isQuiz ? parseQuizData(comment.quiz) : null, [isQuiz, comment.quiz]);
   const replyCount = comment.replies?.length || 0;
   const commentBlockCount = parsedComment.text.match(/<(?:p|div|br|li)\b/gi)?.length || 0;
-  const hasCollapsibleDetail = Boolean(
+  const hasCollapsibleDetail = !isQuiz && Boolean(
     parsedComment.image ||
       replyCount > 0 ||
       plainTextFromHtml(parsedComment.text).length > 80 ||
@@ -582,7 +589,7 @@ export const CommentCard: React.FC<CommentCardProps> = ({
       className={
         embedded
           ? `cm-comment-card group relative w-full text-left transition-all py-1 ${isEditing ? "z-[80]" : isActive ? "z-[70]" : "z-0"} ${isTargetHovered ? "cm-comment-card-sweep" : ""}`
-          : `cm-comment-card group relative w-[300px] rounded-lg border border-[var(--border-medium)] bg-[var(--bg-elevated)] p-3 text-left shadow-md transition-all hover:border-[var(--border-strong)] ${isEditing ? "z-[80]" : isActive ? "z-[70]" : "z-0"} ${isTargetHovered ? "cm-comment-card-sweep" : ""}`
+          : `cm-comment-card group relative w-[300px] ${isQuiz ? "max-w-full min-w-0" : ""} rounded-lg border border-[var(--border-medium)] bg-[var(--bg-elevated)] p-3 text-left shadow-md transition-all hover:border-[var(--border-strong)] ${isEditing ? "z-[80]" : isActive ? "z-[70]" : "z-0"} ${isTargetHovered ? "cm-comment-card-sweep" : ""}`
       }
       onClick={onSelect}
       onMouseEnter={() => setShowActions(true)}
@@ -590,24 +597,28 @@ export const CommentCard: React.FC<CommentCardProps> = ({
     >
       {/* Top Header Row - no profile picture avatar */}
       <div className="flex items-center justify-between">
-        <div className="flex items-baseline gap-2">
-          <span className="text-[13px] font-medium text-[var(--text-primary)] tracking-tight">
-            {comment.author.name}
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className={`text-[13px] font-medium text-[var(--text-primary)] tracking-tight ${isQuiz ? "min-w-0 [overflow-wrap:anywhere]" : ""}`}>
+            {isQuiz ? (
+              <span className="flex min-w-0 items-center gap-1.5 break-words">
+                <ListChecks size={15} className="shrink-0 text-(--interactive-accent)" aria-hidden="true" />
+                {quiz?.topic || "Quiz unavailable"}
+              </span>
+            ) : comment.author.name}
           </span>
           <span className="text-[11.5px] font-normal text-[var(--text-muted)]">
-            {formatRelativeTime(comment.createdAt)}
-            {comment.editedAt ? " edited" : ""}
+            {isQuiz ? "Quiz" : <>{formatRelativeTime(comment.createdAt)}{comment.editedAt ? " edited" : ""}</>}
           </span>
         </div>
 
         {/* Action buttons on hover */}
         <div
-          className={`flex items-center gap-1 transition-opacity ${
-            showActions ? "opacity-100" : "opacity-0"
+          className={`flex shrink-0 items-center gap-1 transition-opacity ${
+            showActions ? "opacity-100" : "opacity-0 group-focus-within:opacity-100"
           }`}
           onClick={(e) => e.stopPropagation()}
         >
-          {onEdit && (
+          {onEdit && !isQuiz && (
             <button
               type="button"
               title="Edit comment"
@@ -677,7 +688,13 @@ export const CommentCard: React.FC<CommentCardProps> = ({
         <>
 
       {/* Comment Text Body */}
-      {parsedComment.text ? (
+      {isQuiz ? (
+        quiz ? <>
+          {comment.from === comment.to && <p className="mb-0 mt-2 text-xs text-(--text-muted)">The anchored passage is no longer available.</p>}
+          <QuizCommentBody key={comment.id} quiz={quiz} onAnswer={onAnswerQuiz} />
+        </>
+          : <p className="mt-2 text-xs text-(--text-muted)">This quiz could not be loaded.</p>
+      ) : parsedComment.text ? (
         <FormattedCommentText
           text={parsedComment.text}
           className={`mt-1 break-words text-[13px] leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap [&_p]:m-0 [&_p+p]:mt-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 ${isCollapsed ? "cm-comment-collapsed-body max-h-[42px] overflow-hidden" : ""}`}
