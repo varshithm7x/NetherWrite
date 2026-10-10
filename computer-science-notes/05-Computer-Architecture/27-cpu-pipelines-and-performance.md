@@ -1,4 +1,4 @@
-# CPU Pipelines and Performance
+ # CPU Pipelines and Performance
 
 ## Core idea
 Pipelining overlaps instruction stages to improve throughput. It can complete more instructions per unit time without necessarily reducing the latency of an individual instruction.

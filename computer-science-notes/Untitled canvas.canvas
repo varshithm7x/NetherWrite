@@ -1,0 +1,75 @@
+{
+  "nodes": [
+    {
+      "id": "mv27zmidq6q14fr71",
+      "x": 180,
+      "y": 200,
+      "width": 400,
+      "height": 300,
+      "type": "group",
+      "label": "Group",
+      "zIndex": 1
+    },
+    {
+      "id": "mv2805m3fdf34d7vb",
+      "x": 191,
+      "y": 207,
+      "width": 343,
+      "height": 251,
+      "type": "link",
+      "url": "https://www.youtube.com/watch?v=MFhxShGxHWc",
+      "zIndex": 2
+    },
+    {
+      "id": "mv280zex66vduylos",
+      "x": 250,
+      "y": -120,
+      "width": 447,
+      "height": 273,
+      "type": "group",
+      "label": "Group",
+      "zIndex": 3
+    },
+    {
+      "id": "mv281phfpa3dl53lb",
+      "x": 610,
+      "y": 240,
+      "width": 260,
+      "height": 160,
+      "color": "#361415",
+      "type": "text",
+      "text": "1. Pruning (Early Termination)\nThe most crucial optimization. Continuously check constraints as the partial solution is being built. If adding a choice makes the current path invalid, stop exploring that path immediately. This significantly reduces the search space.\nExample: In N-Queens, checking for conflicts after placing each queen. If a conflict exists, don't try placing more queens in that partial board configuration.",
+      "zIndex": 6
+    },
+    {
+      "id": "mv28pkxrejz6um0mb",
+      "x": 255.46587183937737,
+      "y": -113.2290217303752,
+      "width": 428.31682365301435,
+      "height": 260.5653909847834,
+      "type": "link",
+      "url": "https://www.youtube.com/watch?v=TbbSJrY5GqQ",
+      "zIndex": 5
+    },
+    {
+      "id": "mv28qgim8o1w8z9c3",
+      "x": 209.62428366588455,
+      "y": 540,
+      "width": 447.7633218366682,
+      "height": 522.2869358819296,
+      "type": "file",
+      "file": "02-Algorithms/07-algorithm-complexity.md",
+      "zIndex": 7
+    }
+  ],
+  "edges": [],
+  "scribbles": [],
+  "netherwriteCanvasCustomizationV1": {
+    "defaultEdgeColor": "#4517b3"
+  },
+  "netherwriteCanvasViewportV1": {
+    "x": 156.72522019183157,
+    "y": 202.4697711510414,
+    "zoom": 0.47932684147061116
+  }
+}

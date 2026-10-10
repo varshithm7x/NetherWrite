@@ -18,6 +18,7 @@ import {
   Layers,
   Zap,
   ChevronRight,
+  Globe,
 } from "lucide-react";
 import {
   loadStore,
@@ -64,6 +65,7 @@ import {
   type VaultCitation,
 } from "../../utils/vault-rag";
 import { CitedMarkdownAnswer, MarkdownReadingView } from "./CitedMarkdownAnswer";
+import { answerWebQuestion, type WebAnswer } from "../../utils/ai-web-search";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -356,6 +358,10 @@ export function AIPage({
 
   // ── Ask vault with exact citations ─────────────────
   const [askQuery, setAskQuery] = useState("");
+  const [webEnabled, setWebEnabled] = useState(false);
+  const [webResult, setWebResult] = useState<WebAnswer | null>(null);
+  const [webError, setWebError] = useState<string | null>(null);
+  const webRequestRef = useRef<AbortController | null>(null);
   const askInputRef = useRef<HTMLTextAreaElement>(null);
   const [askResult, setAskResult] = useState<VaultAnswer | null>(null);
   const [retrievedPassages, setRetrievedPassages] = useState<VaultCitation[]>([]);
@@ -364,6 +370,20 @@ export function AIPage({
   const [askError, setAskError] = useState<string | null>(null);
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
   const liveContentRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    setAskResult(null);
+    setRetrievedPassages([]);
+    setWebResult(null);
+    setWebError(null);
+    setAskError(null);
+    setAskStatus(null);
+    setIsAsking(false);
+    liveContentRef.current.clear();
+    return () => {
+      webRequestRef.current?.abort();
+      webRequestRef.current = null;
+    };
+  }, [vaultPath]);
 
   // Keep unsaved editor content available to Ask while the panel stays open.
   // This avoids requiring a close/reopen cycle before a newly typed phrase can
@@ -725,15 +745,20 @@ export function AIPage({
   const handleAskVault = useCallback(async () => {
     const question = askQuery.trim();
     if (!question || isAsking) return;
+    const controller = new AbortController();
+    webRequestRef.current = controller;
 
     setIsAsking(true);
     setAskError(null);
     setAskResult(null);
+    setWebResult(null);
+    setWebError(null);
     setRetrievedPassages([]);
     setIsSourcesOpen(false);
     setAskStatus("Searching indexed notes…");
     try {
       const currentStore = await loadStoreAsync();
+      if (controller.signal.aborted) return;
       const allPaths = [...new Set([
         ...collectMarkdownPaths(fileTree),
         ...currentStore.entries.keys(),
@@ -741,6 +766,7 @@ export function AIPage({
       const broadSummary = isBroadSummaryQuestion(question);
       const retrievalPlan = getVaultRetrievalPlan(allPaths.length, broadSummary);
       const semanticResults = await searchByQuery(currentStore, question, retrievalPlan.semanticLimit);
+      if (controller.signal.aborted) return;
       setAskStatus("Selecting the most relevant notes…");
       const semanticScores = new Map(semanticResults.map((result) => [result.path, result.similarity]));
       const queryWords = question.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2);
@@ -783,8 +809,10 @@ export function AIPage({
             ...titleMatches,
           ])].slice(0, retrievalPlan.candidateLimit);
 
+      if (controller.signal.aborted) return;
       setAskStatus(`Reading ${candidatePaths.length} candidate notes…`);
       const documents = (await mapWithConcurrency(candidatePaths, 24, async (path) => {
+        if (controller.signal.aborted) return null;
         try {
           const liveContent = liveContentRef.current.get(path);
           return {
@@ -797,6 +825,7 @@ export function AIPage({
         }
       })).filter((document): document is { path: string; content: string; semanticScore: number } => document !== null);
 
+      if (controller.signal.aborted) return;
       setAskStatus("Ranking passages and checking evidence…");
       const passages = rankVaultPassages(
         question,
@@ -805,23 +834,47 @@ export function AIPage({
         broadSummary,
       );
       setRetrievedPassages(passages);
-      if (passages.length === 0) {
+      if (passages.length === 0 && !webEnabled) {
         setAskResult({ answer: "I couldn't find a relevant passage in this vault.", citations: [] });
         return;
       }
       if (!hasApiKey) {
-        setAskError("Relevant passages were found. Configure an AI provider in Settings to generate a cited answer.");
+        setAskError("Configure an AI provider in Settings to generate a cited answer.");
         return;
       }
       setAskStatus("Writing an answer with exact citations…");
-      setAskResult(await answerVaultQuestion(question, passages, setAskStatus));
+      if (passages.length) {
+        try {
+          const result = await answerVaultQuestion(question, passages, status => {
+            if (!controller.signal.aborted) setAskStatus(status);
+          }, controller.signal);
+          if (!controller.signal.aborted) setAskResult(result);
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          if (!webEnabled) throw error;
+          setAskError(error instanceof Error ? error.message : "Unable to answer from local sources.");
+        }
+      }
+      if (webEnabled) {
+        if (controller.signal.aborted) return;
+        setAskStatus("Searching the web for related information and resources…");
+        try {
+          const result = await answerWebQuestion(question, controller.signal);
+          if (!controller.signal.aborted) setWebResult(result);
+        } catch (error) {
+          if (!controller.signal.aborted) setWebError(error instanceof Error ? error.message : "Web search failed. Your local sources remain available.");
+        }
+      }
     } catch (err) {
-      setAskError(err instanceof Error ? err.message : "Unable to search the vault.");
+      if (!controller.signal.aborted) setAskError(err instanceof Error ? err.message : "Unable to search the vault.");
     } finally {
-      setIsAsking(false);
-      setAskStatus(null);
+      if (webRequestRef.current === controller) {
+        webRequestRef.current = null;
+        setIsAsking(false);
+        setAskStatus(null);
+      }
     }
-  }, [api, askQuery, fileTree, hasApiKey, isAsking, activeNotePath]);
+  }, [api, askQuery, fileTree, hasApiKey, isAsking, activeNotePath, webEnabled]);
 
   const displayedSources = askResult
     ? (askResult.citations.length ? askResult.citations : retrievedPassages)
@@ -1033,6 +1086,18 @@ export function AIPage({
                   aria-label="Ask your vault"
                 />
                 <div className={ai.askFooter}>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={webEnabled}
+                    aria-label="Web search"
+                    disabled={isAsking}
+                    onClick={() => { setWebEnabled(value => !value); setWebResult(null); setWebError(null); }}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-(--interactive-accent) ${webEnabled ? "border-(--interactive-accent) bg-(--bg-active) text-(--interactive-accent)" : "border-(--border-subtle) text-(--text-muted)"}`}
+                    title={webEnabled ? "Search local notes and the web. Your question is sent to web search; provider search charges may apply." : "Use only local notes and uploaded resources. The configured AI provider still generates the answer."}
+                  >
+                    <Globe size={13} aria-hidden="true" /> Web {webEnabled ? "on" : "off"}
+                  </button>
                   <span className={ai.askHint}>Enter to ask · Shift+Enter for a new line</span>
                   <button className={ai.askSubmit} type="submit" disabled={!askQuery.trim() || isAsking}>
                     {isAsking ? "Working…" : "Ask vault"}
@@ -1044,10 +1109,12 @@ export function AIPage({
                 <div className={ai.askProgress} role="status" aria-live="polite">
                   <span className={ai.askProgressDot} aria-hidden="true" />
                   <span>{askStatus}</span>
+                  <button type="button" className="ml-auto shrink-0 text-(--text-muted) hover:text-(--text-primary)" onClick={() => webRequestRef.current?.abort()}>Cancel</button>
                 </div>
               )}
 
               {askError && <div className={ai.askError}>{askError}</div>}
+              {webError && <div className={ai.askError} role="alert">{webError}</div>}
 
               {askResult && (
                 <>
@@ -1067,11 +1134,32 @@ export function AIPage({
                 </>
               )}
 
-              {!askResult && !askError && retrievedPassages.length === 0 && !isAsking && (
+              {webResult && (
+                <section aria-label="Web information and resources" className="space-y-3 border-t border-(--border-subtle) pt-3" onClickCapture={event => {
+                  const link = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+                  if (!link) return;
+                  event.preventDefault();
+                  if (!/^https?:\/\//i.test(link.href)) return;
+                  void api.openExternal(link.href).catch(() => setWebError("The resource link could not be opened. Please retry."));
+                }}>
+                  <h3 className="flex items-center gap-2 text-[12px] font-semibold text-(--text-primary)"><Globe size={14} aria-hidden="true" /> From the web</h3>
+                  <MarkdownReadingView markdown={webResult.answer} className={ai.answer} />
+                  <div className="space-y-2" aria-label="Web resources">
+                    {webResult.sources.map(source => (
+                      <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="block break-words rounded-md border border-(--border-subtle) bg-(--bg-secondary) p-2 text-[11px] text-(--interactive-accent) hover:bg-(--bg-active)">
+                        {source.title}
+                        <span className="mt-1 block text-[10px] text-(--text-muted)">{new URL(source.url).hostname}</span>
+                      </a>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {!askResult && !webResult && !askError && !webError && retrievedPassages.length === 0 && !isAsking && (
                 <div className={ai.askEmpty}>
                   <div className={ai.askEmptyTitle}>Search your knowledge</div>
                   <p className={ai.askEmptyCopy}>
-                    Get answers grounded only in your notes. Every claim links back to its exact source passage.
+                    {webEnabled ? "Get answers from your notes plus related information and resources from the web." : "Get answers grounded only in your notes and uploaded resources. Every claim links back to its exact source passage."}
                   </p>
                   <div className={ai.promptGrid}>
                     {ASK_STARTERS.map((starter) => (

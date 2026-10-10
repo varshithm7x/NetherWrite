@@ -362,6 +362,7 @@ export async function answerVaultQuestion(
   question: string,
   passages: VaultCitation[],
   onStatus?: (status: string) => void,
+  signal?: AbortSignal,
 ): Promise<VaultAnswer> {
   if (passages.length === 0) {
     return { answer: "I couldn't find a relevant passage in this vault.", citations: [] };
@@ -385,6 +386,7 @@ Keep the answer concise and use clean Markdown.${isBroadSummary ? "\nFor this br
     userContent,
     1200,
     0.1,
+    signal,
   );
   onStatus?.("Drafting a source-grounded answer…");
   const draft = normalizeCitationSyntax(await request(systemPrompt));
@@ -397,6 +399,7 @@ Check every factual paragraph and list item against the supplied sources. Keep a
       `Question: ${question}\n\nDRAFT TO AUDIT:\n${draft}\n\nAUTHORITATIVE SOURCES:\n${context}`,
     ));
   } catch {
+    if (signal?.aborted) throw signal.reason || new Error("Answer cancelled.");
     // A valid first draft is still preferable to failing solely because the
     // optional audit request was interrupted.
   }
