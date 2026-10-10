@@ -1,8 +1,11 @@
+import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import { GalleryVerticalEnd, Layers, MoreHorizontal } from "lucide-react";
 import type { FlashcardDeck } from "../../types/flashcards";
 
 interface ForgeCreationsProps {
+  children?: ReactNode;
+  hasOtherCreations?: boolean;
   decks: FlashcardDeck[];
   loading: boolean;
   error: string | null;
@@ -13,7 +16,7 @@ interface ForgeCreationsProps {
 }
 const focusClass = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--interactive-accent)";
 
-export function ForgeCreations({ decks, loading, error, skipped, onRetry, onOpen, onDelete }: ForgeCreationsProps) {
+export function ForgeCreations({ decks, loading, error, skipped, onRetry, onOpen, onDelete, children, hasOtherCreations }: ForgeCreationsProps) {
   const [menu, setMenu] = useState<string | null>(null);
   const [pending, setPending] = useState<FlashcardDeck | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -75,7 +78,8 @@ export function ForgeCreations({ decks, loading, error, skipped, onRetry, onOpen
             </li>
           ))}
         </ul>
-      ) : !loading && <div className="flex min-h-36 flex-col items-center justify-center gap-3 py-6 text-center text-(--text-muted)"><GalleryVerticalEnd size={24} aria-hidden="true" /><p className="m-0 text-xs leading-relaxed">Your generated content will appear here.</p></div>}
+      ) : !loading && !hasOtherCreations && <div className="flex min-h-36 flex-col items-center justify-center gap-3 py-6 text-center text-(--text-muted)"><GalleryVerticalEnd size={24} aria-hidden="true" /><p className="m-0 text-xs leading-relaxed">Your generated content will appear here.</p></div>}
+      {children}
       {pending && <div role="alertdialog" aria-labelledby={confirmId} className="mt-3 rounded-lg border border-(--border-medium) bg-(--bg-secondary) p-3 text-xs"
         onKeyDown={event => { if (event.key === "Escape" && !deleting) { event.preventDefault(); event.stopPropagation(); setPending(null); trigger.current?.focus(); } }}>
         <p id={confirmId} className="m-0 break-words font-medium">Delete “{pending.title}”?</p>

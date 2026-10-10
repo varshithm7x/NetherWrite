@@ -313,3 +313,22 @@ it("still opens Quizzes with its original question controls", async () => {
   expect(button("Generate Quiz")).not.toBeNull();
   expect(container.querySelector('[aria-label="Number of flashcards"]')).toBeNull();
 });
+
+it("shows saved flashcards and mind maps together and opens each tool independently", async () => {
+  await saveFlashcardDeck(deck(), mocks.vault);
+  mocks.disk.set(`${mocks.vault}:forge-mind-maps.json`, JSON.stringify([{
+    id: "saved-map", createdAt: 1, sources: [{ path: current.path, name: current.name }],
+    root: { id: "root", label: "Memory Concepts", children: [] },
+  }]));
+  await renderForge();
+  expect(container.querySelectorAll("#forge-creations-title")).toHaveLength(1);
+  expect(container.textContent).toContain("Flashcards · 2 cards");
+  expect(container.textContent).toContain("Memory Concepts");
+  expect(container.textContent).not.toContain("Your generated content will appear here.");
+  await click([...container.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes("Memory Concepts"))!);
+  expect(container.querySelector('[aria-label="Interactive mind map"]')).not.toBeNull();
+  await click(container.querySelector<HTMLButtonElement>('[aria-label="Close mind map"]')!);
+  await click([...container.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes("Memory Flashcards"))!);
+  expect(container.textContent).toContain("Question 1?");
+  expect(mocks.ask).not.toHaveBeenCalled();
+});

@@ -102,6 +102,11 @@ export function RightSidebar({
 }: RightSidebarProps) {
   const activePluginView = rightPluginViews.find((v) => v.viewType === activeTab);
   const [keepIntelligenceMounted, setKeepIntelligenceMounted] = React.useState(activeTab === "ai");
+  const [keepForgeMounted, setKeepForgeMounted] = React.useState(activeTab === "forge");
+
+  React.useEffect(() => {
+    if (activeTab === "forge") setKeepForgeMounted(true);
+  }, [activeTab]);
 
   React.useEffect(() => {
     if (activeTab === "ai") setKeepIntelligenceMounted(true);
@@ -182,14 +187,14 @@ export function RightSidebar({
           </div>
         )}
 
-        {activeTab === "forge" && (
-          <div className="right-sidebar-view h-full">
-            <ForgePanel onClose={onClose} vaultPath={vaultPath}
+        {(activeTab === "forge" || keepForgeMounted) && <div hidden={activeTab !== "forge"} inert={activeTab !== "forge"} className={`right-sidebar-view h-full ${activeTab !== "forge" ? "hidden" : ""}`}>
+            <ForgePanel key={vaultPath || "no-vault"} onClose={onClose} vaultPath={vaultPath}
+              currentContent={currentContent} activeFilePath={activeFilePath} activeFileName={activeFileName}
+              allNoteNames={allNoteNames} onOpenSource={path => { void openFile(path); }}
               activeNote={activeFilePath ? { name: activeFileName, path: activeFilePath } : null}
               notes={allNoteNames.filter(note => /\.md$/i.test(note.path))}
               readNoteContent={readNoteContent} onOpenNote={path => openFile(path)} />
-          </div>
-        )}
+          </div>}
 
         {/* Retain Intelligence's local state when switching to Forge. */}
         {(activeTab === "ai" || (activeTab === "forge" && keepIntelligenceMounted)) && vaultPath && (
