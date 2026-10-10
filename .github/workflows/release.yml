@@ -20,6 +20,11 @@ on:
           - linux
           - windows
           - macos
+      allow_unconfigured_google:
+        description: "Allow Windows release without Google Drive application identity"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -30,6 +35,10 @@ jobs:
     runs-on: ${{ matrix.platform.os }}
     env:
       GH_TOKEN: ${{ github.token }}
+      NETHERWRITE_GOOGLE_CLIENT_ID: ${{ vars.NETHERWRITE_GOOGLE_CLIENT_ID }}
+      NETHERWRITE_GOOGLE_TOKEN_BROKER_URL: ${{ vars.NETHERWRITE_GOOGLE_TOKEN_BROKER_URL }}
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,8 +59,6 @@ jobs:
             script: package:win
             release_paths: |
               release/*.exe
-              release/*.blockmap
-              release/latest.yml
           - name: macos
             os: macos-latest
             script: package:mac
@@ -132,7 +139,17 @@ jobs:
 
       - name: Build installers
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
-        run: npm run ${{ matrix.platform.script }}
+        shell: bash
+        env:
+          ALLOW_UNCONFIGURED_GOOGLE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unconfigured_google && matrix.platform.name == 'windows' }}
+          PACKAGE_SCRIPT: ${{ matrix.platform.script }}
+        run: |
+          if [ "$ALLOW_UNCONFIGURED_GOOGLE" = "true" ]; then
+            npm run build
+            npx electron-builder --win nsis portable --x64 --publish never
+          else
+            npm run "$PACKAGE_SCRIPT"
+          fi
 
       - name: Verify release artifacts
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.platform.name }}
