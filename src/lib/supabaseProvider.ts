@@ -119,8 +119,11 @@ export class SupabaseProvider {
 
     // Resolve encryption status
     this.isPrivate = await this._checkPrivate();
+    if (this.destroyed) return;
 
-    const channelName = `yjs:${this.spaceId}`;
+    // Supabase reuses channels with the same topic. Each note needs its own
+    // channel so opening/closing another tab cannot resubscribe or close this one.
+    const channelName = `yjs:${this.spaceId}:${encodeURIComponent(this.notePath)}`;
     console.log(`[YJS] Provider connecting to channel ${channelName} for note: ${this.notePath} (guid: ${this.doc.guid}, isPrivate=${this.isPrivate})`);
 
     const channel = supabase.channel(channelName, {
@@ -236,7 +239,10 @@ export class SupabaseProvider {
   // ── Local update handling ─────────────────────────────────────────────
 
   private _onDocUpdate = (update: Uint8Array, origin: any): void => {
-    if (origin === 'remote' || this.destroyed) return;
+    if (this.destroyed) return;
+    this._scheduleFilesystemWrite();
+    this._scheduleSnapshotPersist();
+    if (origin === 'remote') return;
 
     this.pendingUpdates.push(update);
 
@@ -245,10 +251,6 @@ export class SupabaseProvider {
         void this._flush();
       }, SupabaseProvider.BATCH_INTERVAL_MS);
     }
-
-    // Schedule filesystem write and snapshot persistence
-    this._scheduleFilesystemWrite();
-    this._scheduleSnapshotPersist();
   };
 
   private async _flush(): Promise<void> {
@@ -295,11 +297,7 @@ export class SupabaseProvider {
     try {
       const update = await this._decodeUpdate(payload);
       Y.applyUpdate(this.doc, update, 'remote');
-      // Persist remote edits to local filesystem and IndexedDB.
-      // _onDocUpdate skips origin='remote' (to avoid re-broadcasting),
-      // so we must explicitly schedule persistence here.
-      this._scheduleFilesystemWrite();
-      this._scheduleSnapshotPersist();
+      // The doc update event persists actual changes; duplicate updates do no work.
     } catch (err) {
       console.warn('[YjsProvider] Failed to apply remote update:', err);
     }
@@ -357,8 +355,6 @@ export class SupabaseProvider {
     try {
       const update = await this._decodeUpdateRaw(payload.update);
       Y.applyUpdate(this.doc, update, 'remote');
-      this._scheduleFilesystemWrite();
-      this._scheduleSnapshotPersist();
 
       // After applying their updates, send back our own state vector diff
       // so the responder also gets any updates we have that they don't.
@@ -427,8 +423,6 @@ export class SupabaseProvider {
     try {
       const state = await this._decodeUpdateRaw(payload.state);
       Y.applyUpdate(this.doc, state, 'remote');
-      this._scheduleFilesystemWrite();
-      this._scheduleSnapshotPersist();
     } catch (err) {
       console.warn('[YjsProvider] Failed to handle snapshot response:', err);
     }
@@ -440,10 +434,11 @@ export class SupabaseProvider {
     added: number[];
     updated: number[];
     removed: number[];
-  }): void => {
-    if (this.destroyed || !this.channel || !this.connected) return;
+  }, origin: unknown): void => {
+    if (origin === 'remote' || this.destroyed || !this.channel || !this.connected) return;
 
-    const changedClients = [...added, ...updated, ...removed];
+    const changedClients = [...added, ...updated, ...removed].filter(id => id === this.doc.clientID);
+    if (!changedClients.length) return;
     const update = encodeAwarenessUpdate(this.awareness, changedClients);
     this.pendingAwarenessUpdate = update;
 
@@ -612,10 +607,11 @@ export class SupabaseProvider {
       const isCanvas = cleanPath.toLowerCase().endsWith('.canvas');
       let content = getYDocContent(this.doc, isCanvas);
       const api = getAPI();
+      let existingRaw: string | null = null;
+      try { existingRaw = await api.readFile(cleanPath); } catch { /* New file. */ }
 
       if (isCanvas && content) {
         try {
-          const existingRaw = await api.readFile(cleanPath);
           if (existingRaw) {
             const existingParsed = JSON.parse(existingRaw);
             if (existingParsed.netherwriteCanvasViewportV1) {
@@ -626,6 +622,7 @@ export class SupabaseProvider {
           }
         } catch {}
       }
+      if (existingRaw === content || this.destroyed) return;
 
       // Ensure parent directory exists
       if (cleanPath.includes('/')) {
@@ -633,7 +630,7 @@ export class SupabaseProvider {
         try { await api.createDirectory(parentDir); } catch { /* exists */ }
       }
 
-      await api.writeFile(cleanPath, content);
+      if (!this.destroyed) await api.writeFile(cleanPath, content);
     } catch (err) {
       console.warn('[YjsProvider] Filesystem write failed:', err);
     }
@@ -663,6 +660,7 @@ export class SupabaseProvider {
 
       // Look up existing note record
       let note = await localDB.getNoteByPath(this.spaceId, cleanPath);
+      if (note && note.content === content && note.content_hash === contentHash && !note.deleted) return;
 
       if (note) {
         note.content = content;

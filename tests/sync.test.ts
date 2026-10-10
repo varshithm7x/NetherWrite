@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SyncEngine, normalizeSyncPath } from '../src/lib/syncEngine';
 import { localDB, getLocalDB } from '../src/lib/localdb';
 import { authManager } from '../src/lib/auth';
+import { collaborationEngine } from '../src/lib/collaborationEngine';
 import { sha256Hex } from '../src/utils/collabDocument';
 
 // ── Mock Supabase Client ──
@@ -170,6 +171,26 @@ describe('SyncEngine Tests', () => {
 
     engine = new SyncEngine();
     await engine.setActiveVault('/vault');
+  });
+
+  it('does not repeatedly scan or reconnect an already active vault', async () => {
+    const lookups = vi.mocked(collaborationEngine.getSpaceForVault).mock.calls.length;
+    const scans = vi.mocked(window.electronAPI.getFileTree).mock.calls.length;
+    await Promise.all(Array.from({ length: 20 }, () => engine.setActiveVault('/vault')));
+    expect(vi.mocked(collaborationEngine.getSpaceForVault).mock.calls.length).toBe(lookups);
+    expect(vi.mocked(window.electronAPI.getFileTree).mock.calls.length).toBe(scans);
+    await engine.setActiveVault('/vault', true);
+    expect(vi.mocked(collaborationEngine.getSpaceForVault).mock.calls.length).toBe(lookups + 1);
+  });
+
+  it('ignores a late cloud-space lookup after the vault has changed', async () => {
+    let finish!: (space: any) => void;
+    vi.mocked(collaborationEngine.getSpaceForVault).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const opening = engine.setActiveVault('/old-vault');
+    await engine.setActiveVault(null);
+    finish({ id: 'old-space' });
+    await opening;
+    expect(engine.activeSpaceId).toBeNull();
   });
 
   it('normalizes relative vault paths correctly', () => {

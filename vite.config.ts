@@ -52,7 +52,7 @@ export default defineConfig({
   optimizeDeps: {
     // Lazy model/document imports must be ready before the first indexing/upload
     // request; discovering them later makes Vite reload the active renderer.
-    include: ['d3-force', 'd3', 'mermaid', 'react-colorful', '@xenova/transformers', 'onnxruntime-web', 'pdfjs-dist/legacy/build/pdf.mjs', 'mammoth/mammoth.browser.js', 'xlsx', 'docx-preview', '@aiden0z/pptx-renderer'],
+    include: ['d3-force', 'd3', 'mermaid', 'react-colorful', '@xenova/transformers', 'onnxruntime-web', 'pdfjs-dist/legacy/build/pdf.mjs', 'mammoth/mammoth.browser.js', 'xlsx', 'docx-preview', '@aiden0z/pptx-renderer', 'y-codemirror.next', 'y-indexeddb', 'y-protocols/awareness', 'yjs', 'lib0'],
   },
   worker: {
     format: 'es',

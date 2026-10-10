@@ -2527,8 +2527,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let treeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleTreeRefresh = (structural: boolean) => {
+      if (treeRefreshTimer) clearTimeout(treeRefreshTimer);
+      treeRefreshTimer = null;
+      if (structural) void refreshFileTree();
+      else treeRefreshTimer = setTimeout(() => {
+        treeRefreshTimer = null;
+        void refreshFileTree();
+      }, 1500);
+    };
     const onFileCreated = () => {
-      void refreshFileTree();
+      scheduleTreeRefresh(true);
     };
 
     const onFileWritten = (event: Event) => {
@@ -2548,7 +2558,9 @@ export default function App() {
       });
       if (meaningfulChanges.length === 0) return;
 
-      void refreshFileTree();
+      // Keep modification metadata current once editing pauses; creations and
+      // deletions still appear immediately without scanning the tree per save.
+      scheduleTreeRefresh(meaningfulChanges.some(change => change.type !== "modify"));
       for (const change of meaningfulChanges) {
         if (!change.isDirectory && change.type !== "delete") {
           void indexMarkdownFileNow(change.path);
@@ -2571,6 +2583,7 @@ export default function App() {
     });
 
     return () => {
+      if (treeRefreshTimer) clearTimeout(treeRefreshTimer);
       window.removeEventListener("netherwrite:file-created", onFileCreated as EventListener);
       window.removeEventListener("netherwrite:directory-created", onFileCreated as EventListener);
       window.removeEventListener("netherwrite:file-written", onFileWritten as EventListener);
@@ -3512,18 +3525,9 @@ export default function App() {
         currentContentRef.current = content;
         currentContentPathRef.current = path;
 
-        if (!markModified) {
-          if (contentUpdateTimeoutRef.current) {
-            clearTimeout(contentUpdateTimeoutRef.current);
-            contentUpdateTimeoutRef.current = null;
-          }
-          pendingContentUpdateRef.current = null;
-          setCurrentContent(content);
-          loadBacklinks(path);
-          return;
-        }
-
         // Debounce setCurrentContent and CustomEvent dispatch
+        // Remote typing already updates CodeMirror through Yjs; coalesce its
+        // parent/sidebar updates too instead of rerendering App per keystroke.
         pendingContentUpdateRef.current = { path, content };
         if (contentUpdateTimeoutRef.current) {
           clearTimeout(contentUpdateTimeoutRef.current);
@@ -3552,7 +3556,7 @@ export default function App() {
         void indexMarkdownFileNow(path, content);
       }, 2000);
     },
-    [activeTabId, tabs, flushContentUpdate, loadBacklinks],
+    [activeTabId, tabs, flushContentUpdate],
   );
 
   // Auto-save with debounce
@@ -4511,7 +4515,7 @@ export default function App() {
       // We DO NOT unsubscribe here to avoid tearing down the channel on every render.
       // Unsubscription is handled on context change (above) or actual component unmount (below).
     };
-  }, [vaultPath, currentUser, authLoading]);
+  }, [vaultPath, currentUser?.id, authLoading]);
 
   // Unmount-only cleanup for collaboration and syncEngine
   useEffect(() => {
@@ -4530,7 +4534,7 @@ export default function App() {
       }
       if (status.state === 'syncing' || status.state === 'ready') {
         if (vaultPath) {
-          syncEngine.setActiveVault(vaultPath);
+          syncEngine.setActiveVault(vaultPath, true);
         }
         (async () => {
           const tree = await api.getFileTree();

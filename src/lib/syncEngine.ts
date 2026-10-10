@@ -137,6 +137,8 @@ export class SyncEngine {
   }
 
   private activeVaultPath: string | null = null;
+  private vaultSetup: Promise<void> | null = null;
+  private vaultSetupVersion = 0;
   private clientId: string = '';
   private lastLocalScanTime = 0;
   private activeSpacePrivateCache = new Map<string, boolean>();
@@ -157,14 +159,28 @@ export class SyncEngine {
    * Set the active vault and resolve its corresponding cloud space.
    * Called by App.tsx when a vault is opened/switched.
    */
-  public async setActiveVault(vaultPath: string | null) {
+  public async setActiveVault(vaultPath: string | null, force = false) {
+    if (this.activeVaultPath === vaultPath) {
+      if (this.vaultSetup) return this.vaultSetup;
+      if (!force && (this._activeSpaceId || !vaultPath)) return;
+    }
     this.activeVaultPath = vaultPath;
+    const version = ++this.vaultSetupVersion;
+    const setup = this.initializeActiveVault(vaultPath, version);
+    this.vaultSetup = setup;
+    try { await setup; } finally {
+      if (this.vaultSetup === setup) this.vaultSetup = null;
+    }
+  }
 
+  private async initializeActiveVault(vaultPath: string | null, version: number) {
     if (vaultPath) {
       try {
         const space = await collaborationEngine.getSpaceForVault(vaultPath);
+        if (version !== this.vaultSetupVersion) return;
         this._activeSpaceId = space?.id || null;
       } catch {
+        if (version !== this.vaultSetupVersion) return;
         this._activeSpaceId = null;
       }
     } else {
@@ -172,10 +188,10 @@ export class SyncEngine {
     }
 
     // If there's an active space, do an initial sync (push + pull)
-    if (this.activeSpaceId) {
+    if (vaultPath && this.activeSpaceId) {
       // Force offline edits scan on vault load
       this.syncLocalFilesystemToDB(true).then(() => {
-        this.sync();
+        if (version === this.vaultSetupVersion) this.sync();
       });
     }
   }

@@ -55,8 +55,9 @@ function observeFileChanges(api: API): API {
       dispatchFileChange("netherwrite:file-written", detail);
     },
     async createDirectory(dirPath: string): Promise<void> {
+      const existed = await api.fileExists(dirPath).catch(() => false);
       await api.createDirectory(dirPath);
-      dispatchFileChange("netherwrite:directory-created", { path: dirPath, created: true });
+      if (!existed) dispatchFileChange("netherwrite:directory-created", { path: dirPath, created: true });
     },
   } as API;
 }

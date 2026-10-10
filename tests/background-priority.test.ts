@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { prioritizeForegroundGeneration, waitForForegroundGeneration } from "../src/utils/background-priority";
+import { prioritizeEditing, prioritizeForegroundGeneration, waitForForegroundGeneration } from "../src/utils/background-priority";
 import { enqueueJob, getQueueLength, initializeVault, resetQueueState, startProcessing } from "../src/utils/background-queue";
 
 const mocks = vi.hoisted(() => ({ embed: vi.fn(), annotation: vi.fn(), store: { entries: new Map() }, write: vi.fn() }));
@@ -14,6 +14,20 @@ const releases: Array<() => void> = [];
 function foreground() { const release = prioritizeForegroundGeneration(); releases.push(release); return release; }
 beforeEach(() => { resetQueueState(); mocks.embed.mockReset().mockResolvedValue(true); mocks.annotation.mockReset().mockResolvedValue(null); mocks.write.mockReset().mockResolvedValue(undefined); mocks.store.entries.clear(); });
 afterEach(() => { resetQueueState(); releases.splice(0).forEach(release => release()); vi.useRealTimers(); });
+
+it("pauses analysis through a burst of local or remote editing and resumes after idle", async () => {
+  vi.useFakeTimers();
+  prioritizeEditing();
+  const resumed = vi.fn();
+  const waiting = waitForForegroundGeneration().then(resumed);
+  await vi.advanceTimersByTimeAsync(1000);
+  prioritizeEditing();
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(resumed).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await waiting;
+  expect(resumed).toHaveBeenCalledOnce();
+});
 
 it("yields background analysis until foreground generation finishes, with idempotent release", async () => {
   const first = foreground(); const second = foreground();

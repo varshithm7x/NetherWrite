@@ -2,6 +2,19 @@
 // changes scheduling only; jobs and embedding results are retained.
 let foregroundCount = 0;
 const waiters = new Set<() => void>();
+let editingTimer: ReturnType<typeof setTimeout> | null = null;
+let releaseEditing: (() => void) | null = null;
+
+/** Pause analysis between model batches while either collaborator is editing. */
+export function prioritizeEditing(): void {
+  if (!releaseEditing) releaseEditing = prioritizeForegroundGeneration();
+  if (editingTimer) clearTimeout(editingTimer);
+  editingTimer = setTimeout(() => {
+    editingTimer = null;
+    releaseEditing?.();
+    releaseEditing = null;
+  }, 1500);
+}
 
 export function prioritizeForegroundGeneration(): () => void {
   foregroundCount++;

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { prioritizeEditing } from "../../utils/background-priority";
 import { PdfDocumentView } from "../documents/PdfDocumentView";
 import { Editor } from "../editor/Editor";
 import { EditorHeader } from "../editor/EditorHeader";
@@ -508,6 +509,7 @@ function MarkdownLeafPaneEditor({
 
   const handleContentChange = useCallback((newContent: string, isUserEdit?: boolean, sourcePath = activeTab.path) => {
     if (!sourcePath || sourcePath === "__new_tab__") return;
+    if (newContent !== latestContentRef.current) prioritizeEditing();
     latestContentRef.current = newContent;
     latestContentPathRef.current = sourcePath;
 

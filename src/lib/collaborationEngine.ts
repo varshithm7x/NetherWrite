@@ -210,6 +210,7 @@ class CollaborationEngine {
   private _activeSpaceId: string | null = null;
   private _activeUsers: ActiveUser[] = [];
   private realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+  private subscriptionVersion = 0;
   private clientId: string = '';
   private lastAppliedTimestamps = new Map<string, number>();
   private _collabPaused: boolean = false;
@@ -218,6 +219,7 @@ class CollaborationEngine {
   private reconnectingSpaceId: string | null = null;
   private lastPresenceNoteId: string | null = null;
   private lastPresenceTyping = false;
+  private sentPresence: { channel: NonNullable<CollaborationEngine['realtimeChannel']>; noteId: string | null; isTyping: boolean } | null = null;
   private incomingOperationQueues = new Map<string, CollabOperation[]>();
   private incomingOperationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private appliedOperationIds = new Set<string>();
@@ -479,6 +481,12 @@ class CollaborationEngine {
   }
 
   private notifyActiveUsers(users: ActiveUser[]) {
+    if (users.length === this._activeUsers.length && users.every(user => {
+      const previous = this._activeUsers.find(item => item.id === user.id);
+      return previous && previous.email === user.email && previous.name === user.name
+        && previous.color === user.color && previous.isEditing === user.isEditing
+        && previous.activeNoteId === user.activeNoteId;
+    })) return;
     this._activeUsers = users;
     this.activeUsersListeners.forEach(fn => fn(users));
   }
@@ -1311,6 +1319,7 @@ class CollaborationEngine {
 
     this.unsubscribeFromSpace();
     this._activeSpaceId = spaceId;
+    const version = this.subscriptionVersion;
 
     // Auto-restore private space unlock key if stored locally
     try {
@@ -1318,9 +1327,11 @@ class CollaborationEngine {
     } catch { /* best-effort */ }
 
     // Guarantee clientId is loaded before any broadcast/filter logic runs.
+    if (version !== this.subscriptionVersion || this._activeSpaceId !== spaceId) return;
     if (!this.clientId) {
       this.clientId = await localDB.getClientId();
     }
+    if (version !== this.subscriptionVersion || this._activeSpaceId !== spaceId) return;
 
     const client = getClient();
     const session = authManager.getState().session;
@@ -1392,6 +1403,7 @@ class CollaborationEngine {
           this.reconnectingSpaceId = null;
           const user = authManager.getUser();
           try {
+            this.sentPresence = { channel, noteId: this.lastPresenceNoteId, isTyping: this.lastPresenceTyping };
             await channel.track({
               user_id: userId,
               email: user?.email || '',
@@ -1410,6 +1422,7 @@ class CollaborationEngine {
               syncEngine.sync();
             } catch { /* best-effort */ }
           } catch (trackErr) {
+            if (this.sentPresence?.channel === channel) this.sentPresence = null;
             console.error('[Collab] Failed to track presence after subscribe:', trackErr);
             this.scheduleRealtimeReconnect(spaceId);
           }
@@ -1541,6 +1554,8 @@ class CollaborationEngine {
   }
 
   unsubscribeFromSpace() {
+    this.subscriptionVersion++;
+    this.sentPresence = null;
     if (this.realtimeChannel) {
       const channel = this.realtimeChannel;
       this.realtimeChannel = null;
@@ -1828,8 +1843,12 @@ class CollaborationEngine {
     if (!userId) return;
 
     const user = authManager.getUser();
+    const channel = this.realtimeChannel;
+    if (this.sentPresence?.channel === channel && this.sentPresence.noteId === noteId && this.sentPresence.isTyping === isTyping) return;
+    const sent = { channel, noteId, isTyping };
+    this.sentPresence = sent;
     try {
-      await this.realtimeChannel.track({
+      await channel.track({
         user_id: userId,
         email: user?.email || '',
         active_note_id: noteId,
@@ -1837,6 +1856,7 @@ class CollaborationEngine {
         online_at: new Date().toISOString(),
       });
     } catch (err) {
+      if (this.sentPresence === sent) this.sentPresence = null;
       console.warn('[Collab] Presence update failed; reconnecting realtime channel:', err);
       if (this._activeSpaceId) this.scheduleRealtimeReconnect(this._activeSpaceId);
     }
